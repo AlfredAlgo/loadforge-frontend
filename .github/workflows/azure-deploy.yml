@@ -28,7 +28,13 @@ jobs:
       - name: Build
         run: pnpm build
         env:
-          SKIP_ENV_VALIDATION: true
+          SKIP_ENV_VALIDATION: false
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SOCKET_URL: ${{ secrets.SOCKET_URL }}
+          BETTER_AUTH_SECRET: ${{ secrets.BETTER_AUTH_SECRET }}
+          BETTER_AUTH_URL: ${{ secrets.BETTER_AUTH_URL }}
+          NEXT_PUBLIC_APP_URL: ${{ secrets.NEXT_PUBLIC_APP_URL }}
+          NEXT_PUBLIC_BETTER_AUTH_CALLBACK: ${{ secrets.NEXT_PUBLIC_BETTER_AUTH_CALLBACK }}
 
       - name: Zip standalone output
         run: |
