@@ -40,8 +40,8 @@ jobs:
         run: |
           cp -r .next/static .next/standalone/.next/static
           if [ -d public ]; then cp -r public .next/standalone/public; fi
-          cp -r node_modules .next/standalone/node_modules
           cd .next/standalone
+          pnpm install --prod
           zip -r ../../standalone.zip .
 
       - name: Upload artifact
