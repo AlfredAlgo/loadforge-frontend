@@ -36,12 +36,12 @@ jobs:
           NEXT_PUBLIC_APP_URL: ${{ secrets.NEXT_PUBLIC_APP_URL }}
           NEXT_PUBLIC_BETTER_AUTH_CALLBACK: ${{ secrets.NEXT_PUBLIC_BETTER_AUTH_CALLBACK }}
 
-      - name: Zip standalone output
+      - name: Prepare standalone
         run: |
           cp -r .next/static .next/standalone/.next/static
           if [ -d public ]; then cp -r public .next/standalone/public; fi
           cd .next/standalone
-          pnpm install --prod
+          pnpm install --prod --no-frozen-lockfile
           zip -r ../../standalone.zip .
 
       - name: Upload artifact
