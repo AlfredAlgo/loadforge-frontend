@@ -39,7 +39,7 @@ jobs:
       - name: Zip standalone output
         run: |
           cp -r .next/static .next/standalone/.next/static
-          cp -r public .next/standalone/public
+          if [ -d public ]; then cp -r public .next/standalone/public; fi
           cd .next/standalone
           zip -r ../../standalone.zip .
 
