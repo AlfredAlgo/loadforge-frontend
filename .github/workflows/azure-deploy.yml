@@ -40,11 +40,10 @@ jobs:
         run: |
           cp -r .next/static .next/standalone/.next/static
           if [ -d public ]; then cp -r public .next/standalone/public; fi
-          cp -r node_modules/.pnpm .next/standalone/node_modules/.pnpm || true
           cp -r node_modules/next .next/standalone/node_modules/next
-          cp -r node_modules/styled-jsx .next/standalone/node_modules/styled-jsx
           cp -r node_modules/react .next/standalone/node_modules/react
           cp -r node_modules/react-dom .next/standalone/node_modules/react-dom
+          cp -r node_modules/.pnpm .next/standalone/node_modules/.pnpm || true
           cd .next/standalone
           zip -r ../../standalone.zip .
 
