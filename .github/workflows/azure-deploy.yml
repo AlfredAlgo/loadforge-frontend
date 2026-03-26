@@ -40,12 +40,8 @@ jobs:
         run: |
           cp -r .next/static .next/standalone/.next/static
           if [ -d public ]; then cp -r public .next/standalone/public; fi
-          # Find where pnpm stores next
-          NEXT_PATH=$(find node_modules -name "next" -type d -maxdepth 4 | head -1)
-          echo "Found next at: $NEXT_PATH"
-          cp -r $NEXT_PATH .next/standalone/node_modules/next
-          # Copy all node_modules into standalone
-          cp -rL node_modules/. .next/standalone/node_modules/
+          rm -rf .next/standalone/node_modules
+          cp -rL node_modules .next/standalone/node_modules
           cd .next/standalone
           zip -r ../../standalone.zip .
 
