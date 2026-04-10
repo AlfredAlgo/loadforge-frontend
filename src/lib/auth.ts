@@ -1,4 +1,4 @@
-import {betterAuth} from 'better-auth'
+import {betterAuth, email} from 'better-auth'
 import { db } from '../server/db'
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import * as schema from '../server/db/schema'
@@ -24,7 +24,12 @@ export const auth = betterAuth({
   }),
   emailAndPassword: {
     enabled: true,
-    requireEmailVerification: false
+    requireEmailVerification: false,
+    sendResetPassword: async ({user, url}) => {
+      // Implement your email sending logic here using your preferred email service
+      // For example, you could use nodemailer or any transactional email service API
+      console.log(`Send password reset email to ${user.email} with token: ${url}`);
+    }
   },
   plugins: [nextCookies()],
   secret: env.BETTER_AUTH_SECRET,
