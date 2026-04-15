@@ -1,68 +1,40 @@
-name: Build and deploy LoadForge frontend to Azure
+name: Build and deploy loadforge-frontend to ACR
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   workflow_dispatch:
 
 jobs:
-  build:
+  build-and-deploy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Log in to Azure Container Registry
+        uses: docker/login-action@v3
         with:
-          node-version: '20'
+          registry: ${{ secrets.ACR_LOGIN_SERVER }}
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v3
+      - name: Build and push image
+        uses: docker/build-push-action@v5
         with:
-          version: 9.15.4
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Build
-        run: pnpm build
-        env:
-          SKIP_ENV_VALIDATION: false
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          SOCKET_URL: ${{ secrets.SOCKET_URL }}
-          BETTER_AUTH_SECRET: ${{ secrets.BETTER_AUTH_SECRET }}
-          BETTER_AUTH_URL: ${{ secrets.BETTER_AUTH_URL }}
-          NEXT_PUBLIC_APP_URL: ${{ secrets.NEXT_PUBLIC_APP_URL }}
-          NEXT_PUBLIC_BETTER_AUTH_CALLBACK: ${{ secrets.NEXT_PUBLIC_BETTER_AUTH_CALLBACK }}
-
-      - name: Prepare standalone
-        run: |
-          cp -r .next/static .next/standalone/.next/static
-          if [ -d public ]; then cp -r public .next/standalone/public; fi
-          rm -rf .next/standalone/node_modules
-          cp -rL node_modules .next/standalone/node_modules
-          cd .next/standalone
-          zip -r ../../standalone.zip .
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: nextjs-app
-          path: standalone.zip
-
-  deploy:
-    runs-on: ubuntu-latest
-    needs: build
-    steps:
-      - name: Download artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: nextjs-app
+          context: .
+          push: true
+          tags: ${{ secrets.ACR_LOGIN_SERVER }}/loadforge-frontend:latest
+          build-args: |
+            DATABASE_URL=${{ secrets.DATABASE_URL }}
+            SOCKET_URL=${{ secrets.SOCKET_URL }}
+            BETTER_AUTH_SECRET=${{ secrets.BETTER_AUTH_SECRET }}
+            BETTER_AUTH_URL=${{ secrets.BETTER_AUTH_URL }}
+            NEXT_PUBLIC_APP_URL=${{ secrets.NEXT_PUBLIC_APP_URL }}
+            NEXT_PUBLIC_BETTER_AUTH_CALLBACK=${{ secrets.NEXT_PUBLIC_BETTER_AUTH_CALLBACK }}
 
       - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v3
         with:
           app-name: 'LoadForge'
           publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
-          package: standalone.zip
+          images: ${{ secrets.ACR_LOGIN_SERVER }}/loadforge-frontend:latest

@@ -1,42 +1,47 @@
-# ======================
-# Stage 1: Base
-# ======================
-FROM node:20-alpine
+FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-# Enable Corepack and pnpm
-RUN corepack enable && corepack prepare pnpm@latest --activate
+RUN corepack enable && corepack prepare pnpm@9.15.4 --activate
 
-# Add unprivileged user
-RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 nextjs
+COPY package.json pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
 
-# Copy entire project (mirrors local structure exactly)
 COPY . .
 
+ARG DATABASE_URL
+ARG SOCKET_URL
+ARG BETTER_AUTH_SECRET
+ARG BETTER_AUTH_URL
 ARG NEXT_PUBLIC_APP_URL
 ARG NEXT_PUBLIC_BETTER_AUTH_CALLBACK
 
-# Set as environment variables for the build
+ENV DATABASE_URL=$DATABASE_URL
+ENV SOCKET_URL=$SOCKET_URL
+ENV BETTER_AUTH_SECRET=$BETTER_AUTH_SECRET
+ENV BETTER_AUTH_URL=$BETTER_AUTH_URL
 ENV NEXT_PUBLIC_APP_URL=$NEXT_PUBLIC_APP_URL
 ENV NEXT_PUBLIC_BETTER_AUTH_CALLBACK=$NEXT_PUBLIC_BETTER_AUTH_CALLBACK
+ENV SKIP_ENV_VALIDATION=false
 
-
-# Install dependencies
-RUN pnpm install --frozen-lockfile
-
-# Build project
-ENV SKIP_ENV_VALIDATION=true
 RUN pnpm build
 
-# Set user
-USER nextjs
+FROM node:20-alpine AS runner
 
-# Expose port
-EXPOSE 3000
+WORKDIR /app
+
+RUN corepack enable && corepack prepare pnpm@9.15.4 --activate
+
+COPY --from=builder /app/package.json ./
+COPY --from=builder /app/pnpm-lock.yaml ./
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/.next ./.next
+COPY --from=builder /app/public ./public
+COPY --from=builder /app/src ./src
+COPY --from=builder /app/tsconfig.json ./
+
+EXPOSE 8080
+ENV PORT=8080
 ENV NODE_ENV=production
-ENV PORT=3000
 
-# Start server
 CMD ["pnpm", "start"]
