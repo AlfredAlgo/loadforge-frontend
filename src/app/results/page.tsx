@@ -37,9 +37,14 @@ export default function ResultsPage( ) {
       // refetchOnWindowFocus: false, // Optional: useful if you don't want it to refetch when the window regains focus
     }
   );
+  const {data: phaseData, isLoading: isPhaseLoading, isError: isPhaseError} = api.loadTest.getTestPhases.useQuery(
+    { testId },
+    {
+      enabled: !!testId, // Ensure this query only runs when testId is available
+    }
+  );
 
-
-  if (isLoading) {
+  if (isLoading || isPhaseLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <p className="text-xl text-gray-700">Loading test results...</p>
@@ -47,7 +52,7 @@ export default function ResultsPage( ) {
     );
   }
 
-  if (isError) {
+  if (isError || isPhaseError) {
     // data.error will contain the TRPCClientError object if there was an API error
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -69,7 +74,7 @@ export default function ResultsPage( ) {
   return (
     <div className="min-h-screen">
       <DashboardNav />
-      <TestResults results={data} />
+      <TestResults results={data} phases={phaseData ?? []}  />
     </div>
   );
 }

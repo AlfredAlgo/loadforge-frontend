@@ -38,6 +38,13 @@ export default function ResultsPage( ) {
     }
   );
 
+  const {data: phaseData, isLoading: isPhaseLoading, isError: isPhaseError} = api.loadTest.getTestPhases.useQuery(
+    { testId },
+    {
+      enabled: !!testId, // Ensure this query only runs when testId is available
+    }
+  );
+
 
   if (isLoading) {
     return (
@@ -69,7 +76,7 @@ export default function ResultsPage( ) {
   return (
     <div className="min-h-screen">
       <DashboardNav />
-      <TestResults results={data} />
+      <TestResults results={data} phases={phaseData ?? []}  />
     </div>
   );
 }
