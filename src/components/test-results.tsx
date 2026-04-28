@@ -1,9 +1,11 @@
 "use client"
 
+import { useState } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "~/components/ui/card"
 import { Badge } from "~/components/ui/badge"
+import { Button } from "~/components/ui/button"
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts"
-import { CheckCircle2, Clock, TrendingUp, AlertCircle } from "lucide-react"
+import { CheckCircle2, Clock, TrendingUp, AlertCircle, Download } from "lucide-react"
 interface TestResultsProps {
   results: {
     testId: string | null;
@@ -30,11 +32,189 @@ interface TestResultsProps {
     };
   };
 }
-export const  TestResults: React.FC<TestResultsProps> = ({ results }) => {
+export const TestResults: React.FC<TestResultsProps> = ({ results }) => {
+  const [exporting, setExporting] = useState(false)
+
   const overallSuccessRate = results.totalRequests
     ? (results.successfulRequests / results.totalRequests) * 100
     : 0;
-  const isSuccess = overallSuccessRate >= 99; // Define what constitutes "success"
+  const isSuccess = overallSuccessRate >= 99;
+
+  const exportToPDF = async () => {
+    setExporting(true)
+    try {
+      const { default: jsPDF } = await import("jspdf")
+      const { default: autoTable } = await import("jspdf-autotable")
+
+      const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" })
+      const pageW = doc.internal.pageSize.getWidth()
+      const purple = [147, 51, 234] as [number, number, number]
+      const darkGray = [31, 31, 31] as [number, number, number]
+      const midGray = [107, 114, 128] as [number, number, number]
+
+      // ── Header bar ──
+      doc.setFillColor(...purple)
+      doc.rect(0, 0, pageW, 22, "F")
+      doc.setTextColor(255, 255, 255)
+      doc.setFontSize(16)
+      doc.setFont("helvetica", "bold")
+      doc.text("LoadForge", 14, 10)
+      doc.setFontSize(9)
+      doc.setFont("helvetica", "normal")
+      doc.text("Performance Test Report", 14, 16)
+      doc.text(`Generated: ${new Date().toLocaleString()}`, pageW - 14, 16, { align: "right" })
+
+      // ── Test ID ──
+      doc.setTextColor(...darkGray)
+      doc.setFontSize(8)
+      doc.setFont("helvetica", "normal")
+      doc.text(`Test ID: ${results.testId ?? "N/A"}`, 14, 30)
+
+      // ── Status badge ──
+      doc.setFillColor(isSuccess ? 22 : 220, isSuccess ? 163 : 38, isSuccess ? 74 : 38)
+      doc.roundedRect(pageW - 50, 24, 36, 8, 2, 2, "F")
+      doc.setTextColor(255, 255, 255)
+      doc.setFontSize(8)
+      doc.setFont("helvetica", "bold")
+      doc.text(isSuccess ? "✓  SUCCESS" : "✗  FAILED", pageW - 32, 29.5, { align: "center" })
+
+      // ── Section: Overview ──
+      let y = 40
+      doc.setTextColor(...purple)
+      doc.setFontSize(11)
+      doc.setFont("helvetica", "bold")
+      doc.text("Overview", 14, y)
+      doc.setDrawColor(...purple)
+      doc.setLineWidth(0.4)
+      doc.line(14, y + 2, pageW - 14, y + 2)
+      y += 8
+
+      autoTable(doc, {
+        startY: y,
+        head: [["Metric", "Value"]],
+        body: [
+          ["Total Requests", results.totalRequests.toLocaleString()],
+          ["Successful Requests", results.successfulRequests.toLocaleString()],
+          ["Failed Requests", results.failedRequests.toLocaleString()],
+          ["Overall Success Rate", `${overallSuccessRate.toFixed(1)}%`],
+          ["Requests / Second", results.requestsPerSecond.toLocaleString()],
+        ],
+        theme: "grid",
+        headStyles: { fillColor: purple, textColor: 255, fontStyle: "bold", fontSize: 9 },
+        bodyStyles: { fontSize: 9, textColor: darkGray },
+        alternateRowStyles: { fillColor: [248, 245, 255] },
+        columnStyles: { 0: { fontStyle: "bold", cellWidth: 70 } },
+        margin: { left: 14, right: 14 },
+      })
+
+      // ── Section: Response Times ──
+      y = (doc as any).lastAutoTable.finalY + 10
+      doc.setTextColor(...purple)
+      doc.setFontSize(11)
+      doc.setFont("helvetica", "bold")
+      doc.text("Response Times", 14, y)
+      doc.setDrawColor(...purple)
+      doc.line(14, y + 2, pageW - 14, y + 2)
+      y += 8
+
+      autoTable(doc, {
+        startY: y,
+        head: [["Percentile / Stat", "Value (ms)"]],
+        body: [
+          ["Average (P50)", `${results.avgResponseTime} ms`],
+          ["P50", `${results.p50ResponseTime} ms`],
+          ["P95", `${results.p95ResponseTime} ms`],
+          ["P99", `${results.p99ResponseTime} ms`],
+          ["Min", `${results.minResponseTime} ms`],
+          ["Max", `${results.maxResponseTime} ms`],
+        ],
+        theme: "grid",
+        headStyles: { fillColor: purple, textColor: 255, fontStyle: "bold", fontSize: 9 },
+        bodyStyles: { fontSize: 9, textColor: darkGray },
+        alternateRowStyles: { fillColor: [248, 245, 255] },
+        columnStyles: { 0: { fontStyle: "bold", cellWidth: 70 } },
+        margin: { left: 14, right: 14 },
+      })
+
+      // ── Section: Phase Metrics ──
+      y = (doc as any).lastAutoTable.finalY + 10
+      doc.setTextColor(...purple)
+      doc.setFontSize(11)
+      doc.setFont("helvetica", "bold")
+      doc.text("Phase Performance", 14, y)
+      doc.setDrawColor(...purple)
+      doc.line(14, y + 2, pageW - 14, y + 2)
+      y += 8
+
+      autoTable(doc, {
+        startY: y,
+        head: [["Phase", "Avg Response Time", "Success Rate"]],
+        body: [
+          ["Ramp Up",   `${results.phaseMetrics.rampUp.avgResponseTime} ms`,   `${results.phaseMetrics.rampUp.successRate.toFixed(1)}%`],
+          ["Steady",    `${results.phaseMetrics.steady.avgResponseTime} ms`,    `${results.phaseMetrics.steady.successRate.toFixed(1)}%`],
+          ["Ramp Down", `${results.phaseMetrics.rampDown.avgResponseTime} ms`, `${results.phaseMetrics.rampDown.successRate.toFixed(1)}%`],
+        ],
+        theme: "grid",
+        headStyles: { fillColor: purple, textColor: 255, fontStyle: "bold", fontSize: 9 },
+        bodyStyles: { fontSize: 9, textColor: darkGray },
+        alternateRowStyles: { fillColor: [248, 245, 255] },
+        margin: { left: 14, right: 14 },
+      })
+
+      // ── Section: URL Breakdown ──
+      y = (doc as any).lastAutoTable.finalY + 10
+      if (y > 240) { doc.addPage(); y = 20 }
+
+      doc.setTextColor(...purple)
+      doc.setFontSize(11)
+      doc.setFont("helvetica", "bold")
+      doc.text("URL Breakdown", 14, y)
+      doc.setDrawColor(...purple)
+      doc.line(14, y + 2, pageW - 14, y + 2)
+      y += 8
+
+      const urlRows = Object.entries(results.urlBreakdown).map(([url, m]: [string, any]) => [
+        url,
+        (m.requests ?? 0).toLocaleString(),
+        `${m.avgResponseTime ?? 0} ms`,
+        `${Number(m.successRate ?? 0).toFixed(1)}%`,
+      ])
+
+      autoTable(doc, {
+        startY: y,
+        head: [["URL", "Requests", "Avg Response Time", "Success Rate"]],
+        body: urlRows.length ? urlRows : [["No URL data available", "", "", ""]],
+        theme: "grid",
+        headStyles: { fillColor: purple, textColor: 255, fontStyle: "bold", fontSize: 9 },
+        bodyStyles: { fontSize: 9, textColor: darkGray },
+        alternateRowStyles: { fillColor: [248, 245, 255] },
+        columnStyles: { 0: { cellWidth: 80 } },
+        margin: { left: 14, right: 14 },
+        didParseCell: (data: any) => {
+          if (data.column.index === 3 && data.section === "body") {
+            const val = parseFloat(data.cell.text[0])
+            if (!isNaN(val) && val < 99) {
+              data.cell.styles.textColor = [220, 38, 38]
+              data.cell.styles.fontStyle = "bold"
+            }
+          }
+        },
+      })
+
+      // ── Footer ──
+      const totalPages = (doc as any).internal.getNumberOfPages()
+      for (let i = 1; i <= totalPages; i++) {
+        doc.setPage(i)
+        doc.setFontSize(7)
+        doc.setTextColor(...midGray)
+        doc.text(`LoadForge · Page ${i} of ${totalPages}`, pageW / 2, 292, { align: "center" })
+      }
+
+      doc.save(`loadforge-report-${results.testId ?? "export"}.pdf`)
+    } finally {
+      setExporting(false)
+    }
+  }
 
   const overviewMetrics = [
     { title: "Total Requests", value: results.totalRequests.toLocaleString(), icon: TrendingUp, color: "text-purple-600" },
@@ -56,13 +236,23 @@ export const  TestResults: React.FC<TestResultsProps> = ({ results }) => {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-3xl font-bold text-gray-900">Test Results for Test ID: {results.testId || 'N/A'}</h1>
-            {/* If test name and completion time were available from the API, you'd use them here */}
             <p className="mt-1 text-sm text-gray-600">Overview of performance metrics</p>
           </div>
-          <Badge className={isSuccess ? "bg-green-100 text-green-700 hover:bg-green-200" : "bg-red-100 text-red-700 hover:bg-red-200"}>
-            {isSuccess ? <CheckCircle2 className="mr-1 h-3 w-3" /> : <AlertCircle className="mr-1 h-3 w-3" />}
-            {isSuccess ? "Success" : "Failed"}
-          </Badge>
+          <div className="flex items-center gap-3">
+            <Badge className={isSuccess ? "bg-green-100 text-green-700 hover:bg-green-200" : "bg-red-100 text-red-700 hover:bg-red-200"}>
+              {isSuccess ? <CheckCircle2 className="mr-1 h-3 w-3" /> : <AlertCircle className="mr-1 h-3 w-3" />}
+              {isSuccess ? "Success" : "Failed"}
+            </Badge>
+            <Button
+              onClick={exportToPDF}
+              disabled={exporting}
+              className="bg-violet-600 hover:bg-violet-700 text-white"
+              size="sm"
+            >
+              <Download className="mr-2 h-4 w-4" />
+              {exporting ? "Exporting..." : "Export PDF"}
+            </Button>
+          </div>
         </div>
       </div>
 
