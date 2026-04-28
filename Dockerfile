@@ -43,4 +43,16 @@ EXPOSE 8080
 ENV PORT=8080
 ENV NODE_ENV=production
 
+# Server-side vars — must be injected by Azure App Service at runtime.
+# Declaring them here so Next.js env validation doesn't crash on startup
+# if Azure hasn't propagated them yet, but they MUST be set in App Settings.
+ARG DATABASE_URL
+ARG SOCKET_URL
+ARG BETTER_AUTH_SECRET
+ARG BETTER_AUTH_URL
+ENV DATABASE_URL=${DATABASE_URL}
+ENV SOCKET_URL=${SOCKET_URL}
+ENV BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
+ENV BETTER_AUTH_URL=${BETTER_AUTH_URL}
+
 CMD ["pnpm", "start"]
