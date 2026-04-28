@@ -121,16 +121,31 @@ export const onTestComplete = () => {
       }
 
       // Prepare phase metrics
+      const buildPhaseMetric = (phaseSummary: any) => {
+        if (!phaseSummary || Object.keys(phaseSummary).length === 0) {
+          return { avgResponseTime: 0, successRate: 0 };
+        }
+        const total = (phaseSummary.success_count || 0) + (phaseSummary.error_count || 0);
+        return {
+          avgResponseTime: secondsToMs(phaseSummary.percentiles?.p50 || 0),
+          successRate: total > 0
+            ? Number(((phaseSummary.success_count || 0) / total * 100).toFixed(1))
+            : 0,
+        };
+      };
+
       const phaseMetrics = {
-        rampUp: phaseSummaries[0] || {},
-        steady:
+        rampUp: buildPhaseMetric(phaseSummaries[0]),
+        steady: buildPhaseMetric(
           phaseSummaries.length > 1
-            ? phaseSummaries[Math.floor(phaseSummaries.length / 2)] || {}
-            : {},
-        rampDown:
+            ? phaseSummaries[Math.floor(phaseSummaries.length / 2)]
+            : null
+        ),
+        rampDown: buildPhaseMetric(
           phaseSummaries.length > 0
-            ? phaseSummaries[phaseSummaries.length - 1] || {}
-            : {},
+            ? phaseSummaries[phaseSummaries.length - 1]
+            : null
+        ),
       };
 
       const test_result_id = uuidv4();
