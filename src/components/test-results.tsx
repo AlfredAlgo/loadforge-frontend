@@ -1,11 +1,10 @@
 "use client"
 
-import { useState } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "~/components/ui/card"
 import { Badge } from "~/components/ui/badge"
-import { Button } from "~/components/ui/button"
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts"
-import { CheckCircle2, Clock, TrendingUp, AlertCircle, Download } from "lucide-react"
+import { CheckCircle2, Clock, TrendingUp, AlertCircle } from "lucide-react"
+
 interface TestResultsProps {
   results: {
     testId: string | null;
@@ -24,197 +23,33 @@ interface TestResultsProps {
       requests: number;
       avgResponseTime: number;
       successRate: number;
+      errors?: Array<{
+        statusCode: number | string;
+        message: string;
+        count: number;
+      }>;
     }>;
-    phaseMetrics: {
-      rampUp: { avgResponseTime: number; successRate: number; };
-      steady: { avgResponseTime: number; successRate: number; };
-      rampDown: { avgResponseTime: number; successRate: number; };
-    };
+   phaseMetrics: {
+  rampUp: { percentiles: { p50: number; p95: number; p99: number }; concurrency: number; requests: number; success_count: number; error_count: number; };
+  steady: { percentiles: { p50: number; p95: number; p99: number }; concurrency: number; requests: number; success_count: number; error_count: number; };
+  rampDown: { percentiles: { p50: number; p95: number; p99: number }; concurrency: number; requests: number; success_count: number; error_count: number; };
+};
   };
+   phases: Array<{
+    phase: number;
+    concurrency: number;
+    requests: number;
+    successCount: number;
+    errorCount: number;
+    percentiles: { p50: number; p95: number; p99: number };
+    successRate: number;
+  }>;
 }
-export const TestResults: React.FC<TestResultsProps> = ({ results }) => {
-  const [exporting, setExporting] = useState(false)
-
+export const  TestResults: React.FC<TestResultsProps> = ({ results, phases }) => {
   const overallSuccessRate = results.totalRequests
     ? (results.successfulRequests / results.totalRequests) * 100
     : 0;
-  const isSuccess = overallSuccessRate >= 99;
-
-  const exportToPDF = async () => {
-    setExporting(true)
-    try {
-      const { default: jsPDF } = await import("jspdf")
-      const { default: autoTable } = await import("jspdf-autotable")
-
-      const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" })
-      const pageW = doc.internal.pageSize.getWidth()
-      const purple = [147, 51, 234] as [number, number, number]
-      const darkGray = [31, 31, 31] as [number, number, number]
-      const midGray = [107, 114, 128] as [number, number, number]
-
-      // ── Header bar ──
-      doc.setFillColor(...purple)
-      doc.rect(0, 0, pageW, 22, "F")
-      doc.setTextColor(255, 255, 255)
-      doc.setFontSize(16)
-      doc.setFont("helvetica", "bold")
-      doc.text("LoadForge", 14, 10)
-      doc.setFontSize(9)
-      doc.setFont("helvetica", "normal")
-      doc.text("Performance Test Report", 14, 16)
-      doc.text(`Generated: ${new Date().toLocaleString()}`, pageW - 14, 16, { align: "right" })
-
-      // ── Test ID ──
-      doc.setTextColor(...darkGray)
-      doc.setFontSize(8)
-      doc.setFont("helvetica", "normal")
-      doc.text(`Test ID: ${results.testId ?? "N/A"}`, 14, 30)
-
-      // ── Status badge ──
-      doc.setFillColor(isSuccess ? 22 : 220, isSuccess ? 163 : 38, isSuccess ? 74 : 38)
-      doc.roundedRect(pageW - 50, 24, 36, 8, 2, 2, "F")
-      doc.setTextColor(255, 255, 255)
-      doc.setFontSize(8)
-      doc.setFont("helvetica", "bold")
-      doc.text(isSuccess ? "✓  SUCCESS" : "✗  FAILED", pageW - 32, 29.5, { align: "center" })
-
-      // ── Section: Overview ──
-      let y = 40
-      doc.setTextColor(...purple)
-      doc.setFontSize(11)
-      doc.setFont("helvetica", "bold")
-      doc.text("Overview", 14, y)
-      doc.setDrawColor(...purple)
-      doc.setLineWidth(0.4)
-      doc.line(14, y + 2, pageW - 14, y + 2)
-      y += 8
-
-      autoTable(doc, {
-        startY: y,
-        head: [["Metric", "Value"]],
-        body: [
-          ["Total Requests", results.totalRequests.toLocaleString()],
-          ["Successful Requests", results.successfulRequests.toLocaleString()],
-          ["Failed Requests", results.failedRequests.toLocaleString()],
-          ["Overall Success Rate", `${overallSuccessRate.toFixed(1)}%`],
-          ["Requests / Second", results.requestsPerSecond.toLocaleString()],
-        ],
-        theme: "grid",
-        headStyles: { fillColor: purple, textColor: 255, fontStyle: "bold", fontSize: 9 },
-        bodyStyles: { fontSize: 9, textColor: darkGray },
-        alternateRowStyles: { fillColor: [248, 245, 255] },
-        columnStyles: { 0: { fontStyle: "bold", cellWidth: 70 } },
-        margin: { left: 14, right: 14 },
-      })
-
-      // ── Section: Response Times ──
-      y = (doc as any).lastAutoTable.finalY + 10
-      doc.setTextColor(...purple)
-      doc.setFontSize(11)
-      doc.setFont("helvetica", "bold")
-      doc.text("Response Times", 14, y)
-      doc.setDrawColor(...purple)
-      doc.line(14, y + 2, pageW - 14, y + 2)
-      y += 8
-
-      autoTable(doc, {
-        startY: y,
-        head: [["Percentile / Stat", "Value (ms)"]],
-        body: [
-          ["Average (P50)", `${results.avgResponseTime} ms`],
-          ["P50", `${results.p50ResponseTime} ms`],
-          ["P95", `${results.p95ResponseTime} ms`],
-          ["P99", `${results.p99ResponseTime} ms`],
-          ["Min", `${results.minResponseTime} ms`],
-          ["Max", `${results.maxResponseTime} ms`],
-        ],
-        theme: "grid",
-        headStyles: { fillColor: purple, textColor: 255, fontStyle: "bold", fontSize: 9 },
-        bodyStyles: { fontSize: 9, textColor: darkGray },
-        alternateRowStyles: { fillColor: [248, 245, 255] },
-        columnStyles: { 0: { fontStyle: "bold", cellWidth: 70 } },
-        margin: { left: 14, right: 14 },
-      })
-
-      // ── Section: Phase Metrics ──
-      y = (doc as any).lastAutoTable.finalY + 10
-      doc.setTextColor(...purple)
-      doc.setFontSize(11)
-      doc.setFont("helvetica", "bold")
-      doc.text("Phase Performance", 14, y)
-      doc.setDrawColor(...purple)
-      doc.line(14, y + 2, pageW - 14, y + 2)
-      y += 8
-
-      autoTable(doc, {
-        startY: y,
-        head: [["Phase", "Avg Response Time", "Success Rate"]],
-        body: [
-          ["Ramp Up",   `${results.phaseMetrics.rampUp.avgResponseTime} ms`,   `${results.phaseMetrics.rampUp.successRate.toFixed(1)}%`],
-          ["Steady",    `${results.phaseMetrics.steady.avgResponseTime} ms`,    `${results.phaseMetrics.steady.successRate.toFixed(1)}%`],
-          ["Ramp Down", `${results.phaseMetrics.rampDown.avgResponseTime} ms`, `${results.phaseMetrics.rampDown.successRate.toFixed(1)}%`],
-        ],
-        theme: "grid",
-        headStyles: { fillColor: purple, textColor: 255, fontStyle: "bold", fontSize: 9 },
-        bodyStyles: { fontSize: 9, textColor: darkGray },
-        alternateRowStyles: { fillColor: [248, 245, 255] },
-        margin: { left: 14, right: 14 },
-      })
-
-      // ── Section: URL Breakdown ──
-      y = (doc as any).lastAutoTable.finalY + 10
-      if (y > 240) { doc.addPage(); y = 20 }
-
-      doc.setTextColor(...purple)
-      doc.setFontSize(11)
-      doc.setFont("helvetica", "bold")
-      doc.text("URL Breakdown", 14, y)
-      doc.setDrawColor(...purple)
-      doc.line(14, y + 2, pageW - 14, y + 2)
-      y += 8
-
-      const urlRows = Object.entries(results.urlBreakdown).map(([url, m]: [string, any]) => [
-        url,
-        (m.requests ?? 0).toLocaleString(),
-        `${m.avgResponseTime ?? 0} ms`,
-        `${Number(m.successRate ?? 0).toFixed(1)}%`,
-      ])
-
-      autoTable(doc, {
-        startY: y,
-        head: [["URL", "Requests", "Avg Response Time", "Success Rate"]],
-        body: urlRows.length ? urlRows : [["No URL data available", "", "", ""]],
-        theme: "grid",
-        headStyles: { fillColor: purple, textColor: 255, fontStyle: "bold", fontSize: 9 },
-        bodyStyles: { fontSize: 9, textColor: darkGray },
-        alternateRowStyles: { fillColor: [248, 245, 255] },
-        columnStyles: { 0: { cellWidth: 80 } },
-        margin: { left: 14, right: 14 },
-        didParseCell: (data: any) => {
-          if (data.column.index === 3 && data.section === "body") {
-            const val = parseFloat(data.cell.text[0])
-            if (!isNaN(val) && val < 99) {
-              data.cell.styles.textColor = [220, 38, 38]
-              data.cell.styles.fontStyle = "bold"
-            }
-          }
-        },
-      })
-
-      // ── Footer ──
-      const totalPages = (doc as any).internal.getNumberOfPages()
-      for (let i = 1; i <= totalPages; i++) {
-        doc.setPage(i)
-        doc.setFontSize(7)
-        doc.setTextColor(...midGray)
-        doc.text(`LoadForge · Page ${i} of ${totalPages}`, pageW / 2, 292, { align: "center" })
-      }
-
-      doc.save(`loadforge-report-${results.testId ?? "export"}.pdf`)
-    } finally {
-      setExporting(false)
-    }
-  }
+  const isSuccess = overallSuccessRate >= 99; // Define what constitutes "success"
 
   const overviewMetrics = [
     { title: "Total Requests", value: results.totalRequests.toLocaleString(), icon: TrendingUp, color: "text-purple-600" },
@@ -224,10 +59,39 @@ export const TestResults: React.FC<TestResultsProps> = ({ results }) => {
   ];
 
   // Data for the "Average Response Times by Phase" chart
-  const performanceData = [
-    { phase: "Ramp Up", avgTime: results.phaseMetrics.rampUp.avgResponseTime },
-    { phase: "Steady", avgTime: results.phaseMetrics.steady.avgResponseTime },
-    { phase: "Ramp Down", avgTime: results.phaseMetrics.rampDown.avgResponseTime },
+  const performanceData = phases.length > 0 ? phases.map((phase) => ({
+    phase: `Phase ${phase.phase}`,
+    p50: phase.percentiles.p50, 
+    p95: phase.percentiles.p95,
+    p99: phase.percentiles.p99,
+    concurrency: phase.concurrency,
+    successRate: phase.successRate,
+    requests: phase.requests,
+  })) : [
+ { 
+  phase: "Ramp Up", 
+  p50: results.phaseMetrics.rampUp.percentiles.p50, 
+  p95: results.phaseMetrics.rampUp.percentiles.p95, 
+  p99: results.phaseMetrics.rampUp.percentiles.p99, 
+  concurrency: results.phaseMetrics.rampUp.concurrency, 
+  requests: results.phaseMetrics.rampUp.requests 
+},
+{ 
+  phase: "Steady", 
+  p50: results.phaseMetrics.steady.percentiles.p50, 
+  p95: results.phaseMetrics.steady.percentiles.p95, 
+  p99: results.phaseMetrics.steady.percentiles.p99, 
+  concurrency: results.phaseMetrics.steady.concurrency, 
+  requests: results.phaseMetrics.steady.requests 
+},
+{ 
+  phase: "Ramp Down", 
+  p50: results.phaseMetrics.rampDown.percentiles.p50, 
+  p95: results.phaseMetrics.rampDown.percentiles.p95, 
+  p99: results.phaseMetrics.rampDown.percentiles.p99, 
+  concurrency: results.phaseMetrics.rampDown.concurrency, 
+  requests: results.phaseMetrics.rampDown.requests 
+},
   ];
 
   return (
@@ -236,23 +100,13 @@ export const TestResults: React.FC<TestResultsProps> = ({ results }) => {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-3xl font-bold text-gray-900">Test Results for Test ID: {results.testId || 'N/A'}</h1>
+            {/* If test name and completion time were available from the API, you'd use them here */}
             <p className="mt-1 text-sm text-gray-600">Overview of performance metrics</p>
           </div>
-          <div className="flex items-center gap-3">
-            <Badge className={isSuccess ? "bg-green-100 text-green-700 hover:bg-green-200" : "bg-red-100 text-red-700 hover:bg-red-200"}>
-              {isSuccess ? <CheckCircle2 className="mr-1 h-3 w-3" /> : <AlertCircle className="mr-1 h-3 w-3" />}
-              {isSuccess ? "Success" : "Failed"}
-            </Badge>
-            <Button
-              onClick={exportToPDF}
-              disabled={exporting}
-              className="bg-violet-600 hover:bg-violet-700 text-white"
-              size="sm"
-            >
-              <Download className="mr-2 h-4 w-4" />
-              {exporting ? "Exporting..." : "Export PDF"}
-            </Button>
-          </div>
+          <Badge className={isSuccess ? "bg-green-100 text-green-700 hover:bg-green-200" : "bg-red-100 text-red-700 hover:bg-red-200"}>
+            {isSuccess ? <CheckCircle2 className="mr-1 h-3 w-3" /> : <AlertCircle className="mr-1 h-3 w-3" />}
+            {isSuccess ? "Success" : "Failed"}
+          </Badge>
         </div>
       </div>
 
@@ -273,35 +127,49 @@ export const TestResults: React.FC<TestResultsProps> = ({ results }) => {
         })}
       </div>
 
-       <div className="mb-6">
+       {/* <div className="mb-6">
         <Card className="border-gray-200">
           <CardHeader>
             <CardTitle className="text-gray-900">Average Response Times by Phase</CardTitle>
             <CardDescription className="text-gray-600">Performance metrics across test phases</CardDescription>
           </CardHeader>
           <CardContent>
-            {performanceData.every(d => !d.avgTime) ? (
-              <div className="flex h-[300px] items-center justify-center text-sm text-gray-400">
-                No phase timing data available for this test
-              </div>
-            ) : (
-              <ResponsiveContainer width="100%" height={300}>
-                <LineChart data={performanceData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                  <XAxis dataKey="phase" stroke="#6b7280" />
-                  <YAxis stroke="#6b7280" unit="ms" domain={['auto', 'auto']} />
-                  <Tooltip
-                    contentStyle={{ backgroundColor: "#ffffff", border: "1px solid #e5e7eb", borderRadius: "8px" }}
-                    formatter={(value: number) => [`${value}ms`, "Average"]}
-                  />
-                  <Legend />
-                  <Line type="monotone" dataKey="avgTime" stroke="#9333ea" name="Average" strokeWidth={2} dot={{ r: 4 }} />
-                </LineChart>
-              </ResponsiveContainer>
-            )}
+            <ResponsiveContainer width="100%" height={300}>
+              <LineChart data={performanceData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                <XAxis dataKey="phase" stroke="#6b7280" />
+                <YAxis stroke="#6b7280" />
+                <Tooltip
+                  contentStyle={{ backgroundColor: "#ffffff", border: "1px solid #e5e7eb", borderRadius: "8px" }}
+                />
+                <Legend />
+                <Line type="monotone" dataKey="avgTime" stroke="#9333ea" name="Average" strokeWidth={2} />
+              </LineChart>
+            </ResponsiveContainer>
           </CardContent>
         </Card>
-      </div>
+      </div> */}
+
+      <Card>
+      <CardHeader>
+        <CardTitle>Response Time Percentiles by Phase</CardTitle>
+        <CardDescription>P50, P95, P99 latencies across all test phases</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <ResponsiveContainer width="100%" height={300}>
+          <LineChart data={performanceData}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+            <XAxis dataKey="phase" stroke="#6b7280" />
+            <YAxis stroke="#6b7280" label={{ value: 'ms', angle: -90, position: 'insideLeft' }} />
+            <Tooltip contentStyle={{ backgroundColor: "#fff", border: "1px solid #e5e7eb", borderRadius: "8px" }} />
+            <Legend />
+            <Line type="monotone" dataKey="p50" stroke="#22c55e" name="P50" strokeWidth={2} />
+            <Line type="monotone" dataKey="p95" stroke="#f59e0b" name="P95" strokeWidth={2} />
+            <Line type="monotone" dataKey="p99" stroke="#ef4444" name="P99" strokeWidth={2} />
+          </LineChart>
+        </ResponsiveContainer>
+      </CardContent>
+    </Card>
 
     
       <Card className="border-gray-200">
@@ -342,6 +210,26 @@ export const TestResults: React.FC<TestResultsProps> = ({ results }) => {
                       <span className="ml-2 font-medium text-gray-900">{urlMetric.avgResponseTime || 0}ms</span>
                     </div>
                   </div>
+                  {Array.isArray(urlMetric.errors) && urlMetric.errors.length > 0 && (
+                    <div className="mt-3 border-t border-gray-200 pt-3">
+                      <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-red-700">
+                        <AlertCircle className="h-3 w-3" />
+                        Errors
+                      </div>
+                      <ul className="space-y-1.5">
+                        {urlMetric.errors.map((err: any, i: number) => (
+                          <li key={i} className="rounded border border-red-200 bg-red-50 px-3 py-2 text-xs">
+                            <div className="flex items-start justify-between gap-2">
+                              <code className="break-all text-red-900">{err.message}</code>
+                              <Badge variant="destructive" className="shrink-0 bg-red-100 text-red-700 hover:bg-red-200">
+                                {err.statusCode} × {err.count}
+                              </Badge>
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
                 </div>
               ))
             ) : (

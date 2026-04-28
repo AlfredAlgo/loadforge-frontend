@@ -4,7 +4,6 @@
 /node_modules
 /.pnp
 .pnp.js
-.pnpm-store/
 
 # testing
 /coverage
@@ -17,15 +16,13 @@ db.sqlite
 # next.js
 /.next/
 /out/
+next-env.d.ts
 
 # production
 /build
-dist/
-next-env.d.ts
 
 # misc
 .DS_Store
-Thumbs.db
 *.pem
 
 # debug
@@ -33,13 +30,11 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
-*.log
 
 # local env files
 # do not commit any .env files to git, except for the .env.example file. https://create.t3.gg/en/usage/env-variables#using-environment-variables
 .env
 .env*.local
-.env.production
 
 # vercel
 .vercel
@@ -47,6 +42,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 
-# editor
+# idea files
 .idea
-.vscode/
+
+/backend/src/**/*.pyc

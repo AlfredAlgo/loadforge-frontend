@@ -26,9 +26,9 @@ export const onTestComplete = () => {
 
     try {
       const phaseSummaries = testData.phase_summaries || [];
-      console.log(`📊 [DB] Processing ${phaseSummaries.length} phase summaries`);
-      console.log(`📊 [DB] Raw phase_summaries:`, JSON.stringify(phaseSummaries, null, 2));
-      console.log(`📊 [DB] Full testData keys:`, Object.keys(testData));
+      console.log(
+        `📊 [DB] Processing ${phaseSummaries.length} phase summaries`
+      );
 
       const totalRequests = testData.total_requests || 0;
       const successfulRequests = testData.success_count || 0;
@@ -117,38 +117,29 @@ export const onTestComplete = () => {
           requests: urlMetric.total_requests || 0,
           avgResponseTime: Math.round((urlMetric.average_time || 0) * 1000), // Convert to ms
           successRate: Number((urlMetric.success_rate || 0).toFixed(1)),
+          errors: Array.isArray(urlMetric.errors)
+            ? urlMetric.errors.map((e: any) => ({
+                statusCode: e.status_code,
+                message: e.error,
+                count: e.count ?? 1,
+              }))
+            : [],
         };
       }
 
       // Prepare phase metrics
-      const buildPhaseMetric = (phaseSummary: any) => {
-        if (!phaseSummary || Object.keys(phaseSummary).length === 0) {
-          return { avgResponseTime: 0, successRate: 0 };
-        }
-        const total = (phaseSummary.success_count || 0) + (phaseSummary.error_count || 0);
-        return {
-          avgResponseTime: secondsToMs(phaseSummary.percentiles?.p50 || 0),
-          successRate: total > 0
-            ? Number(((phaseSummary.success_count || 0) / total * 100).toFixed(1))
-            : 0,
-        };
-      };
-
       const phaseMetrics = {
-        rampUp: buildPhaseMetric(phaseSummaries[0]),
-        steady: buildPhaseMetric(
+        rampUp: phaseSummaries[0] || {},
+        steady:
           phaseSummaries.length > 1
-            ? phaseSummaries[Math.floor(phaseSummaries.length / 2)]
-            : null
-        ),
-        rampDown: buildPhaseMetric(
+            ? phaseSummaries[Math.floor(phaseSummaries.length / 2)] || {}
+            : {},
+        rampDown:
           phaseSummaries.length > 0
-            ? phaseSummaries[phaseSummaries.length - 1]
-            : null
-        ),
+            ? phaseSummaries[phaseSummaries.length - 1] || {}
+            : {},
       };
 
-      console.log(`📊 [DB] Computed phaseMetrics:`, JSON.stringify(phaseMetrics, null, 2));
       const test_result_id = uuidv4();
       console.log(`💾 [DB] Inserting test result with ID: ${test_result_id}`);
 

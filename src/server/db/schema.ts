@@ -1,3 +1,4 @@
+import { error } from "console";
 import { sql } from "drizzle-orm";
 import {
   serial,
@@ -165,6 +166,3 @@ export const settings = createTable("setting", {
     .default(sql`CURRENT_TIMESTAMP`)
     .notNull(),
 });
-
-
-
