@@ -55,11 +55,9 @@ export const onPhaseComplete = () => {
         concurrency: phaseData.concurrency,
         success_count: phaseData.success_count,
         error_count: phaseData.error_count,
-        percentile: phaseData.percentiles,
+        percentile: phaseData.percentiles ?? {},
         requests: phaseData.requests,
-      }).onConflictDoNothing({
-        target: [testPhases.test_id, testPhases.phase_number, testPhases.user_id],
-      });
+      }).onConflictDoNothing();
 
       processedPhases.add(phaseKey);
 

@@ -26,9 +26,9 @@ export const onTestComplete = () => {
 
     try {
       const phaseSummaries = testData.phase_summaries || [];
-      console.log(
-        `📊 [DB] Processing ${phaseSummaries.length} phase summaries`
-      );
+      console.log(`📊 [DB] Processing ${phaseSummaries.length} phase summaries`);
+      console.log(`📊 [DB] Raw phase_summaries:`, JSON.stringify(phaseSummaries, null, 2));
+      console.log(`📊 [DB] Full testData keys:`, Object.keys(testData));
 
       const totalRequests = testData.total_requests || 0;
       const successfulRequests = testData.success_count || 0;
@@ -148,6 +148,7 @@ export const onTestComplete = () => {
         ),
       };
 
+      console.log(`📊 [DB] Computed phaseMetrics:`, JSON.stringify(phaseMetrics, null, 2));
       const test_result_id = uuidv4();
       console.log(`💾 [DB] Inserting test result with ID: ${test_result_id}`);
 

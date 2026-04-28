@@ -90,18 +90,25 @@ export const  TestResults: React.FC<TestResultsProps> = ({ results }) => {
             <CardDescription className="text-gray-600">Performance metrics across test phases</CardDescription>
           </CardHeader>
           <CardContent>
-            <ResponsiveContainer width="100%" height={300}>
-              <LineChart data={performanceData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                <XAxis dataKey="phase" stroke="#6b7280" />
-                <YAxis stroke="#6b7280" />
-                <Tooltip
-                  contentStyle={{ backgroundColor: "#ffffff", border: "1px solid #e5e7eb", borderRadius: "8px" }}
-                />
-                <Legend />
-                <Line type="monotone" dataKey="avgTime" stroke="#9333ea" name="Average" strokeWidth={2} />
-              </LineChart>
-            </ResponsiveContainer>
+            {performanceData.every(d => !d.avgTime) ? (
+              <div className="flex h-[300px] items-center justify-center text-sm text-gray-400">
+                No phase timing data available for this test
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height={300}>
+                <LineChart data={performanceData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                  <XAxis dataKey="phase" stroke="#6b7280" />
+                  <YAxis stroke="#6b7280" unit="ms" domain={['auto', 'auto']} />
+                  <Tooltip
+                    contentStyle={{ backgroundColor: "#ffffff", border: "1px solid #e5e7eb", borderRadius: "8px" }}
+                    formatter={(value: number) => [`${value}ms`, "Average"]}
+                  />
+                  <Legend />
+                  <Line type="monotone" dataKey="avgTime" stroke="#9333ea" name="Average" strokeWidth={2} dot={{ r: 4 }} />
+                </LineChart>
+              </ResponsiveContainer>
+            )}
           </CardContent>
         </Card>
       </div>
