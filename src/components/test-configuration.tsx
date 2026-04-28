@@ -133,29 +133,80 @@ export function TestConfiguration() {
     a.click();
   };
 
-  const importConfig = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const importUrlsCsv = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        try {
-          const config = JSON.parse(event.target?.result as string);
-          setTestName(config.name || "");
-          setUrls(
-            config.urls.map((url: string, i: number) => ({
-              id: Date.now() + i,
-              url,
-            }))
-          );
-          setConcurrency(config.concurrency.join(","));
-          setRampDuration(config.rampDuration.toString());
-          setHoldDuration(config.holdDuration.toString());
-        } catch (error) {
-          console.error("Invalid config file");
-        }
-      };
-      reader.readAsText(file);
+    if (!file) return;
+
+    const isCsv =
+      file.type === "text/csv" || file.name.toLowerCase().endsWith(".csv");
+    if (!isCsv) {
+      setError("Please upload a .csv file containing URLs");
+      e.target.value = "";
+      return;
     }
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const text = (event.target?.result as string) ?? "";
+      const lines = text
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .filter(Boolean);
+
+      const parsed: string[] = [];
+      const invalid: string[] = [];
+
+      for (const line of lines) {
+        const cells = line
+          .split(",")
+          .map((c) => c.trim().replace(/^"|"$/g, ""))
+          .filter(Boolean);
+
+        if (cells.length === 0) continue;
+        if (cells.length > 1) {
+          invalid.push(line);
+          continue;
+        }
+
+        const cell = cells[0]!;
+        if (parsed.length === 0 && /^(url|urls|link|links)$/i.test(cell)) {
+          continue;
+        }
+
+        try {
+          const u = new URL(cell);
+          if (u.protocol !== "http:" && u.protocol !== "https:") {
+            invalid.push(line);
+            continue;
+          }
+          parsed.push(cell);
+        } catch {
+          invalid.push(line);
+        }
+      }
+
+      if (invalid.length > 0) {
+        const preview = invalid.slice(0, 3).join(", ");
+        setError(
+          `CSV must contain only URLs (one per row). Invalid: ${preview}${
+            invalid.length > 3 ? `, +${invalid.length - 3} more` : ""
+          }`
+        );
+        e.target.value = "";
+        return;
+      }
+      if (parsed.length === 0) {
+        setError("No valid URLs found in the CSV");
+        e.target.value = "";
+        return;
+      }
+
+      setUrls(parsed.map((url, i) => ({ id: Date.now() + i, url })));
+      setError(null);
+      e.target.value = "";
+    };
+    reader.onerror = () => setError("Failed to read CSV file");
+    reader.readAsText(file);
   };
 
   return (
@@ -267,8 +318,8 @@ export function TestConfiguration() {
               <label>
                 <input
                   type="file"
-                  accept=".json"
-                  onChange={importConfig}
+                  accept=".csv,text/csv"
+                  onChange={importUrlsCsv}
                   className="hidden"
                   disabled={start.isPending}
                 />
@@ -280,7 +331,7 @@ export function TestConfiguration() {
                 >
                   <span>
                     <Upload className="mr-2 h-4 w-4" />
-                    Import
+                    Import CSV
                   </span>
                 </Button>
               </label>
