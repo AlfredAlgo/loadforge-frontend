@@ -3,6 +3,7 @@ import { db } from "../db/index";
 import { completeTests, testResults } from "../db/schema";
 import { eq } from "drizzle-orm";
 import { v4 as uuidv4 } from "uuid";
+import { getAccumulatedErrors, clearUrlMetrics } from "./url-metrics-store";
 
 
 // Helper function to convert seconds to milliseconds and round to integer
@@ -106,26 +107,37 @@ export const onTestComplete = () => {
 
       console.log(`✅ [DB] Test status updated`);
 
-      // Calculate URL breakdown from backend per_url_metrics
+      // Calculate URL breakdown from backend per_url_metrics.
+      // Merge with phase-accumulated errors as a fallback — the test_completed
+      // event sometimes omits the errors field even when phases had failures.
       const urlBreakdown: Record<string, any> = {};
       const perUrlMetrics = testData.per_url_metrics || {};
-      
+      const accumulatedErrors = getAccumulatedErrors(testData.test_id);
+
       for (const [url, metrics] of Object.entries(perUrlMetrics)) {
         const urlMetric = metrics as any;
+
+        const errorsFromEvent: any[] = Array.isArray(urlMetric.errors) ? urlMetric.errors : [];
+        const errorsFromPhases = accumulatedErrors[url] ?? [];
+
+        // Prefer errors from the event if present; fall back to phase-accumulated errors
+        const rawErrors = errorsFromEvent.length > 0 ? errorsFromEvent : errorsFromPhases;
+
         urlBreakdown[url] = {
           url: url,
           requests: urlMetric.total_requests || 0,
-          avgResponseTime: Math.round((urlMetric.average_time || 0) * 1000), // Convert to ms
+          avgResponseTime: Math.round((urlMetric.average_time || 0) * 1000),
           successRate: Number((urlMetric.success_rate || 0).toFixed(1)),
-          errors: Array.isArray(urlMetric.errors)
-            ? urlMetric.errors.map((e: any) => ({
-                statusCode: e.status_code,
-                message: e.error,
-                count: e.count ?? 1,
-              }))
-            : [],
+          errors: rawErrors.map((e: any) => ({
+            statusCode: e.status_code,
+            message: e.error,
+            count: e.count ?? 1,
+          })),
         };
       }
+
+      // Free accumulated phase data for this test
+      clearUrlMetrics(testData.test_id);
 
       // Prepare phase metrics
       const phaseMetrics = {

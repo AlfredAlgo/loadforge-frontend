@@ -4,6 +4,7 @@ import { testPhases } from "../db/schema";
 import { v4 as uuidv4 } from "uuid";
 import { eq, and } from "drizzle-orm";
 import { auth } from "~/lib/auth";
+import { accumulateUrlMetrics } from "./url-metrics-store";
 
 
 const processedPhases = new Set<string>();
@@ -22,8 +23,12 @@ export const onPhaseComplete = () => {
     }
 
     try {
+      // Accumulate per-URL error data from every phase event so test.complete
+      // can merge it into the final url_breakdown even if test_completed omits errors.
+      if (phaseData.per_url_metrics) {
+        accumulateUrlMetrics(phaseData.test_id, phaseData.per_url_metrics)
+      }
 
-      
       const existingPhase = await db
         .select()
         .from(testPhases)
