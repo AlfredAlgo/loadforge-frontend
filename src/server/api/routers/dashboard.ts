@@ -1,7 +1,7 @@
 import { createTRPCRouter, protectedProcedure, publicProcedure } from "~/server/api/trpc";
 import { z } from "zod";
-import { eq } from "drizzle-orm" 
-import { completeTests } from "../../db/schema";
+import { eq } from "drizzle-orm"
+import { completeTests, testResults } from "../../db/schema";
 
 
 export const dashboardRouter = createTRPCRouter({
@@ -46,7 +46,36 @@ export const dashboardRouter = createTRPCRouter({
         successRate,
         failedRequests,
       },
-      recentTests,  
+      recentTests,
         }
    }),
+
+  getHistory: protectedProcedure.query(async ({ ctx }) => {
+    const userId = ctx.user.id;
+
+    const allResults = await ctx.db.query.testResults.findMany({
+      where: eq(testResults.user_id, userId),
+      orderBy: (r, { asc }) => [asc(r.created_at)],
+    });
+
+    const allTests = await ctx.db.query.completeTests.findMany({
+      where: eq(completeTests.user_id, userId),
+    });
+
+    return allResults.map((r) => {
+      const test = allTests.find((t) => t.id === r.test_id);
+      return {
+        testId: r.test_id,
+        testName: test?.name ?? "Unknown",
+        date: r.created_at.toISOString(),
+        avgResponseTime: r.avg_response_time,
+        successRate: r.total_requests
+          ? Number(((r.successful_requests / r.total_requests) * 100).toFixed(1))
+          : 0,
+        failedRequests: r.failed_requests,
+        totalRequests: r.total_requests,
+        urlBreakdown: r.url_breakdown as Record<string, { url: string; requests: number; avgResponseTime: number; successRate: number; errors?: Array<{ statusCode: number | string; message: string; count: number }> }>,
+      };
+    });
+  }),
 });

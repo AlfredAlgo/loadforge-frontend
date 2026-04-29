@@ -52,10 +52,10 @@ export const  TestResults: React.FC<TestResultsProps> = ({ results, phases }) =>
   const isSuccess = overallSuccessRate >= 99; // Define what constitutes "success"
 
   const overviewMetrics = [
-    { title: "Total Requests", value: results.totalRequests.toLocaleString(), icon: TrendingUp, color: "text-purple-600" },
-    { title: "Avg Response Time", value: `${results.avgResponseTime}ms`, icon: Clock, color: "text-blue-600" },
-    { title: "Success Rate", value: `${overallSuccessRate.toFixed(1)}%`, icon: CheckCircle2, color: "text-green-600" },
-    { title: "Errors", value: results.failedRequests.toLocaleString(), icon: AlertCircle, color: "text-red-600" },
+    { title: "Total Requests", value: results.totalRequests.toLocaleString(), icon: TrendingUp, color: "text-purple-600", anchor: null },
+    { title: "Avg Response Time", value: `${results.avgResponseTime}ms`, icon: Clock, color: "text-blue-600", anchor: null },
+    { title: "Success Rate", value: `${overallSuccessRate.toFixed(1)}%`, icon: CheckCircle2, color: "text-green-600", anchor: null },
+    { title: "Errors", value: results.failedRequests.toLocaleString(), icon: AlertCircle, color: "text-red-600", anchor: "#url-breakdown" },
   ];
 
   // Data for the "Average Response Times by Phase" chart
@@ -113,17 +113,23 @@ export const  TestResults: React.FC<TestResultsProps> = ({ results, phases }) =>
      <div className="mb-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {overviewMetrics.map((metric) => {
           const Icon = metric.icon
-          return (
-            <Card key={metric.title} className="border-gray-200">
+          const card = (
+            <Card key={metric.title} className={`border-gray-200 ${metric.anchor ? "cursor-pointer transition-shadow hover:shadow-md hover:border-red-200" : ""}`}>
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                 <CardTitle className="text-sm font-medium text-gray-600">{metric.title}</CardTitle>
                 <Icon className={`h-4 w-4 ${metric.color}`} />
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold text-gray-900">{metric.value}</div>
+                {metric.anchor && (
+                  <p className="mt-1 text-xs text-red-500">Click to see breakdown ↓</p>
+                )}
               </CardContent>
             </Card>
           )
+          return metric.anchor ? (
+            <a key={metric.title} href={metric.anchor}>{card}</a>
+          ) : card
         })}
       </div>
 
@@ -172,7 +178,7 @@ export const  TestResults: React.FC<TestResultsProps> = ({ results, phases }) =>
     </Card>
 
     
-      <Card className="border-gray-200">
+      <Card id="url-breakdown" className="border-gray-200 scroll-mt-8">
         <CardHeader>
           <CardTitle className="text-gray-900">Performance by URL</CardTitle>
           <CardDescription className="text-gray-600">
