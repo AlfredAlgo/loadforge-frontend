@@ -114,15 +114,6 @@ export const onTestComplete = () => {
       const perUrlMetrics = testData.per_url_metrics || {};
       const accumulatedErrors = getAccumulatedErrors(testData.test_id);
 
-      console.log(`🔍 [TEST COMPLETE] per_url_metrics URLs: ${Object.keys(perUrlMetrics).length}`)
-      console.log(`🔍 [TEST COMPLETE] accumulated errors keys: ${Object.keys(accumulatedErrors).length}`)
-      for (const [url, m] of Object.entries(perUrlMetrics)) {
-        const evtErrors = Array.isArray((m as any).errors) ? (m as any).errors : []
-        const phaseErrors = accumulatedErrors[url] ?? []
-        console.log(`🔍 [URL] ${url} — event errors: ${evtErrors.length}, phase-accumulated errors: ${phaseErrors.length}`)
-        if (evtErrors.length > 0) console.log(`   event sample:`, JSON.stringify(evtErrors[0]))
-        if (phaseErrors.length > 0) console.log(`   phase sample:`, JSON.stringify(phaseErrors[0]))
-      }
 
       for (const [url, metrics] of Object.entries(perUrlMetrics)) {
         const urlMetric = metrics as any;

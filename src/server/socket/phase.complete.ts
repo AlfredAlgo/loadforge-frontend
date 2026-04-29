@@ -27,14 +27,6 @@ export const onPhaseComplete = () => {
       // can merge it into the final url_breakdown even if test_completed omits errors.
       if (phaseData.per_url_metrics) {
         accumulateUrlMetrics(phaseData.test_id, phaseData.per_url_metrics)
-        const urlsWithErrors = Object.entries(phaseData.per_url_metrics)
-          .filter(([, m]: any) => Array.isArray(m.errors) && m.errors.length > 0)
-        console.log(`🔍 [PHASE ${phaseData.phase}] per_url_metrics present — ${Object.keys(phaseData.per_url_metrics).length} URLs, ${urlsWithErrors.length} with errors`)
-        if (urlsWithErrors.length > 0) {
-          console.log(`🔍 [PHASE ${phaseData.phase}] Error sample:`, JSON.stringify(urlsWithErrors[0]))
-        }
-      } else {
-        console.log(`⚠️ [PHASE ${phaseData.phase}] No per_url_metrics in phase_complete event`)
       }
 
       const existingPhase = await db
