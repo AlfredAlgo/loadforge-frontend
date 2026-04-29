@@ -109,6 +109,8 @@ export const onTestComplete = () => {
       // Calculate URL breakdown from backend per_url_metrics
       const urlBreakdown: Record<string, any> = {};
       const perUrlMetrics = testData.per_url_metrics || {};
+      console.log(`🔍 [DB] per_url_metrics keys:`, Object.keys(perUrlMetrics));
+      console.log(`🔍 [DB] per_url_metrics sample:`, JSON.stringify(Object.values(perUrlMetrics)[0], null, 2));
       
       for (const [url, metrics] of Object.entries(perUrlMetrics)) {
         const urlMetric = metrics as any;
