@@ -3,8 +3,9 @@
 import { useState } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "~/components/ui/card"
 import { Badge } from "~/components/ui/badge"
+import { Button } from "~/components/ui/button"
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts"
-import { CheckCircle2, Clock, TrendingUp, AlertCircle, ChevronDown } from "lucide-react"
+import { CheckCircle2, Clock, TrendingUp, AlertCircle, ChevronDown, FileDown } from "lucide-react"
 
 interface TestResultsProps {
   results: {
@@ -48,11 +49,196 @@ interface TestResultsProps {
 }
 export const  TestResults: React.FC<TestResultsProps> = ({ results, phases }) => {
   const [activeMetric, setActiveMetric] = useState<string | null>(null)
+  const [expandedUrls, setExpandedUrls] = useState<Set<string>>(new Set())
+  const [exporting, setExporting] = useState(false)
 
   const overallSuccessRate = results.totalRequests
     ? (results.successfulRequests / results.totalRequests) * 100
     : 0;
   const isSuccess = overallSuccessRate >= 99;
+
+  const toggleUrl = (url: string) => {
+    setExpandedUrls(prev => {
+      const next = new Set(prev)
+      next.has(url) ? next.delete(url) : next.add(url)
+      return next
+    })
+  }
+
+  const exportToPDF = async () => {
+    setExporting(true)
+    try {
+      const { jsPDF } = await import('jspdf')
+      const { default: autoTable } = await import('jspdf-autotable')
+      const doc = new jsPDF()
+
+      const purple: [number, number, number] = [147, 51, 234]
+      const gray: [number, number, number] = [75, 85, 99]
+
+      // Header
+      doc.setFillColor(...purple)
+      doc.rect(0, 0, 210, 28, 'F')
+      doc.setTextColor(255, 255, 255)
+      doc.setFontSize(18)
+      doc.setFont('helvetica', 'bold')
+      doc.text('LoadForge Performance Report', 14, 12)
+      doc.setFontSize(9)
+      doc.setFont('helvetica', 'normal')
+      doc.text(`Generated: ${new Date().toLocaleString()}`, 14, 20)
+      doc.text(`Test ID: ${results.testId ?? 'N/A'}`, 14, 25)
+
+      // Status badge
+      const statusColor: [number, number, number] = isSuccess ? [22, 163, 74] : [220, 38, 38]
+      doc.setFillColor(...statusColor)
+      doc.roundedRect(160, 8, 36, 10, 3, 3, 'F')
+      doc.setTextColor(255, 255, 255)
+      doc.setFontSize(9)
+      doc.setFont('helvetica', 'bold')
+      doc.text(isSuccess ? '✓ SUCCESS' : '✗ FAILED', 178, 14.5, { align: 'center' })
+
+      // Overview metrics
+      doc.setTextColor(...gray)
+      doc.setFontSize(13)
+      doc.setFont('helvetica', 'bold')
+      doc.text('Overview', 14, 40)
+      autoTable(doc, {
+        startY: 44,
+        head: [['Metric', 'Value']],
+        body: [
+          ['Total Requests', results.totalRequests.toLocaleString()],
+          ['Successful Requests', results.successfulRequests.toLocaleString()],
+          ['Failed Requests', results.failedRequests.toLocaleString()],
+          ['Success Rate', `${overallSuccessRate.toFixed(1)}%`],
+          ['Avg Response Time', `${results.avgResponseTime}ms`],
+          ['Requests / Second', String(results.requestsPerSecond)],
+        ],
+        headStyles: { fillColor: purple },
+        alternateRowStyles: { fillColor: [249, 250, 251] },
+        margin: { left: 14, right: 14 },
+        tableWidth: 90,
+      })
+
+      // Response time percentiles
+      const overviewEnd = (doc as any).lastAutoTable.finalY
+      doc.setTextColor(...gray)
+      doc.setFontSize(13)
+      doc.setFont('helvetica', 'bold')
+      doc.text('Response Time Percentiles', 115, 40)
+      autoTable(doc, {
+        startY: 44,
+        head: [['Percentile', 'Time (ms)']],
+        body: [
+          ['Minimum', `${results.minResponseTime}ms`],
+          ['P50 — Median', `${results.p50ResponseTime}ms`],
+          ['P95', `${results.p95ResponseTime}ms`],
+          ['P99', `${results.p99ResponseTime}ms`],
+          ['Maximum', `${results.maxResponseTime}ms`],
+        ],
+        headStyles: { fillColor: purple },
+        alternateRowStyles: { fillColor: [249, 250, 251] },
+        margin: { left: 115, right: 14 },
+        tableWidth: 81,
+      })
+
+      // Phase breakdown
+      const afterOverview = Math.max(overviewEnd, (doc as any).lastAutoTable.finalY) + 10
+      if (phases.length > 0) {
+        doc.setTextColor(...gray)
+        doc.setFontSize(13)
+        doc.setFont('helvetica', 'bold')
+        doc.text('Phase Breakdown', 14, afterOverview)
+        autoTable(doc, {
+          startY: afterOverview + 4,
+          head: [['Phase', 'Concurrency', 'Requests', 'Success', 'Errors', 'Success Rate', 'P50', 'P95', 'P99']],
+          body: phases.map(p => [
+            `Phase ${p.phase}`,
+            p.concurrency,
+            p.requests,
+            p.successCount,
+            p.errorCount,
+            `${p.successRate.toFixed(1)}%`,
+            `${p.percentiles.p50}ms`,
+            `${p.percentiles.p95}ms`,
+            `${p.percentiles.p99}ms`,
+          ]),
+          headStyles: { fillColor: purple, fontSize: 8 },
+          bodyStyles: { fontSize: 8 },
+          alternateRowStyles: { fillColor: [249, 250, 251] },
+          margin: { left: 14, right: 14 },
+        })
+      }
+
+      // URL breakdown
+      const urlEntries = Object.entries(results.urlBreakdown ?? {})
+      if (urlEntries.length > 0) {
+        doc.addPage()
+        doc.setFillColor(...purple)
+        doc.rect(0, 0, 210, 16, 'F')
+        doc.setTextColor(255, 255, 255)
+        doc.setFontSize(13)
+        doc.setFont('helvetica', 'bold')
+        doc.text('Performance by URL', 14, 11)
+
+        autoTable(doc, {
+          startY: 22,
+          head: [['URL', 'Requests', 'Avg Time', 'Success Rate']],
+          body: urlEntries.map(([url, m]: any) => [
+            url.length > 55 ? url.slice(0, 52) + '…' : url,
+            m.requests ?? 0,
+            `${m.avgResponseTime ?? 0}ms`,
+            `${Number(m.successRate ?? 0).toFixed(1)}%`,
+          ]),
+          headStyles: { fillColor: purple },
+          alternateRowStyles: { fillColor: [249, 250, 251] },
+          columnStyles: { 0: { cellWidth: 90 } },
+          margin: { left: 14, right: 14 },
+        })
+
+        // Error details section
+        const urlsWithErrors = urlEntries.filter(([, m]: any) => Array.isArray(m.errors) && m.errors.length > 0)
+        if (urlsWithErrors.length > 0) {
+          let y = (doc as any).lastAutoTable.finalY + 12
+          doc.setTextColor(...gray)
+          doc.setFontSize(13)
+          doc.setFont('helvetica', 'bold')
+          doc.text('Error Details by URL', 14, y)
+          y += 6
+
+          for (const [url, m] of urlsWithErrors as any) {
+            if (y > 260) { doc.addPage(); y = 20 }
+            doc.setFontSize(9)
+            doc.setFont('helvetica', 'bold')
+            doc.setTextColor(...gray)
+            doc.text(url.length > 80 ? url.slice(0, 77) + '…' : url, 14, y)
+            y += 4
+            autoTable(doc, {
+              startY: y,
+              head: [['Status Code', 'Error Message', 'Count']],
+              body: (m as any).errors.map((e: any) => [e.statusCode, e.message, e.count]),
+              headStyles: { fillColor: [220, 38, 38], fontSize: 8 },
+              bodyStyles: { fontSize: 8 },
+              margin: { left: 14, right: 14 },
+            })
+            y = (doc as any).lastAutoTable.finalY + 8
+          }
+        }
+      }
+
+      // Footer on each page
+      const pageCount = doc.getNumberOfPages()
+      for (let i = 1; i <= pageCount; i++) {
+        doc.setPage(i)
+        doc.setFontSize(8)
+        doc.setTextColor(156, 163, 175)
+        doc.text(`LoadForge — Page ${i} of ${pageCount}`, 14, 290)
+        doc.text('loadforge.azurewebsites.net', 196, 290, { align: 'right' })
+      }
+
+      doc.save(`loadforge-report-${(results.testId ?? 'export').slice(0, 8)}.pdf`)
+    } finally {
+      setExporting(false)
+    }
+  }
 
   const overviewMetrics = [
     { title: "Total Requests", value: results.totalRequests.toLocaleString(), icon: TrendingUp, color: "text-purple-600", hoverBorder: "hover:border-purple-300" },
@@ -106,10 +292,21 @@ export const  TestResults: React.FC<TestResultsProps> = ({ results, phases }) =>
             {/* If test name and completion time were available from the API, you'd use them here */}
             <p className="mt-1 text-sm text-gray-600">Overview of performance metrics</p>
           </div>
-          <Badge className={isSuccess ? "bg-green-100 text-green-700 hover:bg-green-200" : "bg-red-100 text-red-700 hover:bg-red-200"}>
-            {isSuccess ? <CheckCircle2 className="mr-1 h-3 w-3" /> : <AlertCircle className="mr-1 h-3 w-3" />}
-            {isSuccess ? "Success" : "Failed"}
-          </Badge>
+          <div className="flex items-center gap-3">
+            <Button
+              onClick={exportToPDF}
+              disabled={exporting}
+              variant="outline"
+              className="border-purple-200 text-purple-600 hover:bg-purple-50 hover:text-purple-700"
+            >
+              <FileDown className="mr-2 h-4 w-4" />
+              {exporting ? "Exporting…" : "Export PDF"}
+            </Button>
+            <Badge className={isSuccess ? "bg-green-100 text-green-700 hover:bg-green-200" : "bg-red-100 text-red-700 hover:bg-red-200"}>
+              {isSuccess ? <CheckCircle2 className="mr-1 h-3 w-3" /> : <AlertCircle className="mr-1 h-3 w-3" />}
+              {isSuccess ? "Success" : "Failed"}
+            </Badge>
+          </div>
         </div>
       </div>
 
@@ -332,62 +529,107 @@ export const  TestResults: React.FC<TestResultsProps> = ({ results, phases }) =>
         <CardHeader>
           <CardTitle className="text-gray-900">Performance by URL</CardTitle>
           <CardDescription className="text-gray-600">
-            Breakdown of requests and response times per endpoint
+            Click any endpoint to see its error details
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="space-y-4">
-            {/* Check if urlBreakdown is an object with entries */}
-            {typeof results.urlBreakdown === 'object' && 
-             results.urlBreakdown !== null && 
+          <div className="space-y-3">
+            {typeof results.urlBreakdown === 'object' &&
+             results.urlBreakdown !== null &&
              Object.keys(results.urlBreakdown).length > 0 ? (
-              Object.entries(results.urlBreakdown).map(([url, urlMetric]: [string, any]) => (
-                <div key={url} className="rounded-lg border border-gray-200 p-4">
-                  <div className="mb-3 flex items-center justify-between">
-                    <code className="text-sm font-medium text-gray-900">{url}</code>
-                    <Badge
-                      variant={urlMetric.successRate >= 99 ? "default" : "destructive"}
-                      className={
-                        urlMetric.successRate >= 99
-                          ? "bg-green-100 text-green-700 hover:bg-green-200"
-                          : "bg-yellow-100 text-yellow-700 hover:bg-yellow-200"
-                      }
+              Object.entries(results.urlBreakdown).map(([url, urlMetric]: [string, any]) => {
+                const isOpen = expandedUrls.has(url)
+                const rate = Number(urlMetric.successRate ?? 0)
+                const hasErrors = Array.isArray(urlMetric.errors) && urlMetric.errors.length > 0
+                const successCount = urlMetric.requests && rate
+                  ? Math.round((rate / 100) * urlMetric.requests)
+                  : urlMetric.requests ?? 0
+                const errorCount = (urlMetric.requests ?? 0) - successCount
+
+                const badgeClass =
+                  rate >= 99 ? "bg-green-100 text-green-700 hover:bg-green-200" :
+                  rate >= 50 ? "bg-yellow-100 text-yellow-700 hover:bg-yellow-200" :
+                               "bg-red-100 text-red-700 hover:bg-red-200"
+
+                return (
+                  <div
+                    key={url}
+                    className={`rounded-lg border transition-all ${isOpen ? "border-purple-300 bg-purple-50/30" : "border-gray-200 bg-white hover:border-purple-200"}`}
+                  >
+                    {/* Clickable header row */}
+                    <button
+                      onClick={() => toggleUrl(url)}
+                      className="flex w-full items-center justify-between p-4 text-left"
                     >
-                      {Number(urlMetric.successRate).toFixed(1)}% success
-                    </Badge>
-                  </div>
-                  <div className="grid grid-cols-2 gap-4 text-sm">
-                    <div>
-                      <span className="text-gray-600">Requests:</span>
-                      <span className="ml-2 font-medium text-gray-900">{urlMetric.requests?.toLocaleString() || 0}</span>
-                    </div>
-                    <div>
-                      <span className="text-gray-600">Avg Time:</span>
-                      <span className="ml-2 font-medium text-gray-900">{urlMetric.avgResponseTime || 0}ms</span>
-                    </div>
-                  </div>
-                  {Array.isArray(urlMetric.errors) && urlMetric.errors.length > 0 && (
-                    <div className="mt-3 border-t border-gray-200 pt-3">
-                      <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-red-700">
-                        <AlertCircle className="h-3 w-3" />
-                        Errors
+                      <div className="flex items-center gap-3 overflow-hidden">
+                        <ChevronDown className={`h-4 w-4 shrink-0 text-gray-400 transition-transform ${isOpen ? "rotate-180" : ""}`} />
+                        <code className="truncate text-sm font-medium text-gray-900">{url}</code>
                       </div>
-                      <ul className="space-y-1.5">
-                        {urlMetric.errors.map((err: any, i: number) => (
-                          <li key={i} className="rounded border border-red-200 bg-red-50 px-3 py-2 text-xs">
-                            <div className="flex items-start justify-between gap-2">
-                              <code className="break-all text-red-900">{err.message}</code>
-                              <Badge variant="destructive" className="shrink-0 bg-red-100 text-red-700 hover:bg-red-200">
-                                {err.statusCode} × {err.count}
-                              </Badge>
-                            </div>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                </div>
-              ))
+                      <div className="ml-4 flex shrink-0 items-center gap-3">
+                        <span className="text-xs text-gray-500">{urlMetric.requests ?? 0} reqs · {urlMetric.avgResponseTime ?? 0}ms avg</span>
+                        <Badge className={badgeClass}>{rate.toFixed(1)}% success</Badge>
+                      </div>
+                    </button>
+
+                    {/* Expanded details */}
+                    {isOpen && (
+                      <div className="border-t border-gray-200 px-4 pb-4 pt-3">
+                        {/* Stats row */}
+                        <div className="mb-4 grid grid-cols-3 gap-3 sm:grid-cols-4">
+                          <div className="rounded-lg border border-gray-200 bg-white p-3 text-center">
+                            <p className="text-xs text-gray-500">Total Requests</p>
+                            <p className="text-lg font-bold text-gray-900">{(urlMetric.requests ?? 0).toLocaleString()}</p>
+                          </div>
+                          <div className="rounded-lg border border-green-100 bg-white p-3 text-center">
+                            <p className="text-xs text-gray-500">Successful</p>
+                            <p className="text-lg font-bold text-green-600">{successCount.toLocaleString()}</p>
+                          </div>
+                          <div className="rounded-lg border border-red-100 bg-white p-3 text-center">
+                            <p className="text-xs text-gray-500">Failed</p>
+                            <p className="text-lg font-bold text-red-600">{errorCount.toLocaleString()}</p>
+                          </div>
+                          <div className="rounded-lg border border-blue-100 bg-white p-3 text-center">
+                            <p className="text-xs text-gray-500">Avg Response</p>
+                            <p className="text-lg font-bold text-blue-600">{urlMetric.avgResponseTime ?? 0}ms</p>
+                          </div>
+                        </div>
+
+                        {/* Errors */}
+                        {hasErrors ? (
+                          <div>
+                            <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-red-700">
+                              <AlertCircle className="h-3.5 w-3.5" />
+                              Errors detected on this endpoint
+                            </p>
+                            <ul className="space-y-2">
+                              {urlMetric.errors.map((err: any, i: number) => (
+                                <li key={i} className="rounded-lg border border-red-200 bg-red-50 px-3 py-2.5">
+                                  <div className="flex items-start justify-between gap-3">
+                                    <div>
+                                      <span className="text-xs font-semibold text-red-800">HTTP {err.statusCode}</span>
+                                      <p className="mt-0.5 break-all text-xs text-red-700">{err.message}</p>
+                                    </div>
+                                    <Badge className="shrink-0 bg-red-100 text-red-800 text-xs">
+                                      {err.count}× occurred
+                                    </Badge>
+                                  </div>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-2 rounded-lg border border-green-200 bg-green-50 px-3 py-2.5 text-sm text-green-700">
+                            <CheckCircle2 className="h-4 w-4 shrink-0" />
+                            {rate === 100
+                              ? "All requests to this endpoint succeeded — no errors recorded."
+                              : "No structured error details available yet. Check backend error logging for this endpoint."}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )
+              })
             ) : (
               <p className="text-gray-500">No URL breakdown data available.</p>
             )}
