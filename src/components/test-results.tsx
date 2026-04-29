@@ -541,10 +541,9 @@ export const  TestResults: React.FC<TestResultsProps> = ({ results, phases }) =>
                 const isOpen = expandedUrls.has(url)
                 const rate = Number(urlMetric.successRate ?? 0)
                 const hasErrors = Array.isArray(urlMetric.errors) && urlMetric.errors.length > 0
-                const successCount = urlMetric.requests && rate
-                  ? Math.round((rate / 100) * urlMetric.requests)
-                  : urlMetric.requests ?? 0
-                const errorCount = (urlMetric.requests ?? 0) - successCount
+                const totalReqs = urlMetric.requests ?? 0
+                const successCount = Math.round((rate / 100) * totalReqs)
+                const errorCount = totalReqs - successCount
 
                 const badgeClass =
                   rate >= 99 ? "bg-green-100 text-green-700 hover:bg-green-200" :
@@ -578,7 +577,7 @@ export const  TestResults: React.FC<TestResultsProps> = ({ results, phases }) =>
                         <div className="mb-4 grid grid-cols-3 gap-3 sm:grid-cols-4">
                           <div className="rounded-lg border border-gray-200 bg-white p-3 text-center">
                             <p className="text-xs text-gray-500">Total Requests</p>
-                            <p className="text-lg font-bold text-gray-900">{(urlMetric.requests ?? 0).toLocaleString()}</p>
+                            <p className="text-lg font-bold text-gray-900">{totalReqs.toLocaleString()}</p>
                           </div>
                           <div className="rounded-lg border border-green-100 bg-white p-3 text-center">
                             <p className="text-xs text-gray-500">Successful</p>
