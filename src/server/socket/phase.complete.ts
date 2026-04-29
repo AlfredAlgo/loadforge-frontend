@@ -14,10 +14,6 @@ export const onPhaseComplete = () => {
     if (event.type !== "phase_complete") return;
 
     const phaseData = event.data;
-    console.log(`🔍 [DB] phase_complete keys:`, Object.keys(phaseData));
-    if (phaseData.per_url_metrics) {
-      console.log(`🔍 [DB] phase per_url_metrics sample:`, JSON.stringify(Object.values(phaseData.per_url_metrics)[0], null, 2));
-    }
 
     const phaseKey = `${phaseData.test_id}-${phaseData.phase}`;
 
