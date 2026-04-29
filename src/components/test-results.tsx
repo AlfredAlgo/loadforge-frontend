@@ -1,9 +1,10 @@
 "use client"
 
+import { useState } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "~/components/ui/card"
 import { Badge } from "~/components/ui/badge"
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts"
-import { CheckCircle2, Clock, TrendingUp, AlertCircle } from "lucide-react"
+import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts"
+import { CheckCircle2, Clock, TrendingUp, AlertCircle, ChevronDown } from "lucide-react"
 
 interface TestResultsProps {
   results: {
@@ -46,16 +47,18 @@ interface TestResultsProps {
   }>;
 }
 export const  TestResults: React.FC<TestResultsProps> = ({ results, phases }) => {
+  const [activeMetric, setActiveMetric] = useState<string | null>(null)
+
   const overallSuccessRate = results.totalRequests
     ? (results.successfulRequests / results.totalRequests) * 100
     : 0;
-  const isSuccess = overallSuccessRate >= 99; // Define what constitutes "success"
+  const isSuccess = overallSuccessRate >= 99;
 
   const overviewMetrics = [
-    { title: "Total Requests", value: results.totalRequests.toLocaleString(), icon: TrendingUp, color: "text-purple-600", anchor: null },
-    { title: "Avg Response Time", value: `${results.avgResponseTime}ms`, icon: Clock, color: "text-blue-600", anchor: null },
-    { title: "Success Rate", value: `${overallSuccessRate.toFixed(1)}%`, icon: CheckCircle2, color: "text-green-600", anchor: null },
-    { title: "Errors", value: results.failedRequests.toLocaleString(), icon: AlertCircle, color: "text-red-600", anchor: "#url-breakdown" },
+    { title: "Total Requests", value: results.totalRequests.toLocaleString(), icon: TrendingUp, color: "text-purple-600", hoverBorder: "hover:border-purple-300" },
+    { title: "Avg Response Time", value: `${results.avgResponseTime}ms`, icon: Clock, color: "text-blue-600", hoverBorder: "hover:border-blue-300" },
+    { title: "Success Rate", value: `${overallSuccessRate.toFixed(1)}%`, icon: CheckCircle2, color: "text-green-600", hoverBorder: "hover:border-green-300" },
+    { title: "Errors", value: results.failedRequests.toLocaleString(), icon: AlertCircle, color: "text-red-600", hoverBorder: "hover:border-red-300" },
   ];
 
   // Data for the "Average Response Times by Phase" chart
@@ -110,28 +113,175 @@ export const  TestResults: React.FC<TestResultsProps> = ({ results, phases }) =>
         </div>
       </div>
 
-     <div className="mb-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+     <div className="mb-2 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {overviewMetrics.map((metric) => {
           const Icon = metric.icon
-          const card = (
-            <Card key={metric.title} className={`border-gray-200 ${metric.anchor ? "cursor-pointer transition-shadow hover:shadow-md hover:border-red-200" : ""}`}>
+          const isOpen = activeMetric === metric.title
+          return (
+            <Card
+              key={metric.title}
+              onClick={() => setActiveMetric(isOpen ? null : metric.title)}
+              className={`cursor-pointer border-gray-200 transition-all ${metric.hoverBorder} hover:shadow-md ${isOpen ? "ring-2 ring-offset-1 " + metric.color.replace("text-", "ring-") : ""}`}
+            >
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                 <CardTitle className="text-sm font-medium text-gray-600">{metric.title}</CardTitle>
-                <Icon className={`h-4 w-4 ${metric.color}`} />
+                <div className="flex items-center gap-1">
+                  <Icon className={`h-4 w-4 ${metric.color}`} />
+                  <ChevronDown className={`h-3 w-3 text-gray-400 transition-transform ${isOpen ? "rotate-180" : ""}`} />
+                </div>
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold text-gray-900">{metric.value}</div>
-                {metric.anchor && (
-                  <p className="mt-1 text-xs text-red-500">Click to see breakdown ↓</p>
-                )}
+                <p className="mt-1 text-xs text-gray-400">Click to expand</p>
               </CardContent>
             </Card>
           )
-          return metric.anchor ? (
-            <a key={metric.title} href={metric.anchor}>{card}</a>
-          ) : card
         })}
       </div>
+
+      {/* Expandable detail panel */}
+      {activeMetric && (
+        <div className="mb-8 rounded-xl border border-gray-200 bg-gray-50 p-6">
+          {activeMetric === "Total Requests" && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="font-semibold text-gray-900">Requests per Phase</h3>
+                <span className="text-sm text-gray-500">{results.requestsPerSecond} req/s overall</span>
+              </div>
+              <div className="grid grid-cols-3 gap-4 text-center">
+                <div className="rounded-lg border border-gray-200 bg-white p-3">
+                  <p className="text-xs text-gray-500">Total</p>
+                  <p className="text-xl font-bold text-purple-600">{results.totalRequests.toLocaleString()}</p>
+                </div>
+                <div className="rounded-lg border border-gray-200 bg-white p-3">
+                  <p className="text-xs text-gray-500">Successful</p>
+                  <p className="text-xl font-bold text-green-600">{results.successfulRequests.toLocaleString()}</p>
+                </div>
+                <div className="rounded-lg border border-gray-200 bg-white p-3">
+                  <p className="text-xs text-gray-500">Failed</p>
+                  <p className="text-xl font-bold text-red-600">{results.failedRequests.toLocaleString()}</p>
+                </div>
+              </div>
+              {phases.length > 0 && (
+                <ResponsiveContainer width="100%" height={220}>
+                  <BarChart data={phases.map(p => ({ phase: `Ph ${p.phase}`, requests: p.requests, concurrency: p.concurrency }))}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                    <XAxis dataKey="phase" stroke="#6b7280" tick={{ fontSize: 12 }} />
+                    <YAxis stroke="#6b7280" />
+                    <Tooltip contentStyle={{ borderRadius: 8 }} />
+                    <Legend />
+                    <Bar dataKey="requests" name="Requests" fill="#9333ea" radius={[4,4,0,0]} />
+                    <Bar dataKey="concurrency" name="Concurrency" fill="#c4b5fd" radius={[4,4,0,0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              )}
+            </div>
+          )}
+
+          {activeMetric === "Avg Response Time" && (
+            <div className="space-y-4">
+              <h3 className="font-semibold text-gray-900">Response Time Breakdown</h3>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+                {[
+                  { label: "Min", value: results.minResponseTime, color: "text-green-600" },
+                  { label: "P50 (Median)", value: results.p50ResponseTime, color: "text-blue-600" },
+                  { label: "P95", value: results.p95ResponseTime, color: "text-yellow-600" },
+                  { label: "P99", value: results.p99ResponseTime, color: "text-orange-600" },
+                  { label: "Max", value: results.maxResponseTime, color: "text-red-600" },
+                ].map(({ label, value, color }) => (
+                  <div key={label} className="rounded-lg border border-gray-200 bg-white p-3 text-center">
+                    <p className="text-xs text-gray-500">{label}</p>
+                    <p className={`text-lg font-bold ${color}`}>{value}ms</p>
+                  </div>
+                ))}
+              </div>
+              {phases.length > 0 && (
+                <ResponsiveContainer width="100%" height={220}>
+                  <LineChart data={phases.map(p => ({ phase: `Ph ${p.phase}`, p50: p.percentiles.p50, p95: p.percentiles.p95, p99: p.percentiles.p99 }))}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                    <XAxis dataKey="phase" stroke="#6b7280" tick={{ fontSize: 12 }} />
+                    <YAxis stroke="#6b7280" unit="ms" />
+                    <Tooltip contentStyle={{ borderRadius: 8 }} formatter={(v: any) => [`${v}ms`]} />
+                    <Legend />
+                    <Line type="monotone" dataKey="p50" stroke="#22c55e" name="P50" strokeWidth={2} dot={{ r: 4 }} />
+                    <Line type="monotone" dataKey="p95" stroke="#f59e0b" name="P95" strokeWidth={2} dot={{ r: 4 }} />
+                    <Line type="monotone" dataKey="p99" stroke="#ef4444" name="P99" strokeWidth={2} dot={{ r: 4 }} />
+                  </LineChart>
+                </ResponsiveContainer>
+              )}
+            </div>
+          )}
+
+          {activeMetric === "Success Rate" && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="font-semibold text-gray-900">Success Rate per Phase</h3>
+                <span className="text-sm text-gray-500">{results.successfulRequests.toLocaleString()} / {results.totalRequests.toLocaleString()} requests succeeded</span>
+              </div>
+              {phases.length > 0 ? (
+                <ResponsiveContainer width="100%" height={220}>
+                  <BarChart data={phases.map(p => ({ phase: `Ph ${p.phase}`, successRate: Number(p.successRate.toFixed(1)), errors: p.errorCount }))}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                    <XAxis dataKey="phase" stroke="#6b7280" tick={{ fontSize: 12 }} />
+                    <YAxis stroke="#6b7280" unit="%" domain={[0, 100]} />
+                    <Tooltip contentStyle={{ borderRadius: 8 }} formatter={(v: any, name: string) => [name === "successRate" ? `${v}%` : v, name === "successRate" ? "Success Rate" : "Errors"]} />
+                    <Legend />
+                    <Bar dataKey="successRate" name="Success Rate" fill="#22c55e" radius={[4,4,0,0]} />
+                    <Bar dataKey="errors" name="Errors" fill="#ef4444" radius={[4,4,0,0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              ) : (
+                <p className="text-sm text-gray-500">No per-phase data available.</p>
+              )}
+            </div>
+          )}
+
+          {activeMetric === "Errors" && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="font-semibold text-gray-900">Error Breakdown</h3>
+                <a href="#url-breakdown" className="text-sm text-purple-600 hover:underline">View URL breakdown ↓</a>
+              </div>
+              {results.failedRequests === 0 ? (
+                <div className="flex items-center gap-2 rounded-lg border border-green-200 bg-green-50 p-4 text-green-700">
+                  <CheckCircle2 className="h-5 w-5" />
+                  <span className="font-medium">All {results.totalRequests.toLocaleString()} requests succeeded — no errors recorded.</span>
+                </div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+                    <div className="rounded-lg border border-red-100 bg-white p-3 text-center">
+                      <p className="text-xs text-gray-500">Total Errors</p>
+                      <p className="text-xl font-bold text-red-600">{results.failedRequests.toLocaleString()}</p>
+                    </div>
+                    <div className="rounded-lg border border-gray-200 bg-white p-3 text-center">
+                      <p className="text-xs text-gray-500">Error Rate</p>
+                      <p className="text-xl font-bold text-orange-600">{(100 - overallSuccessRate).toFixed(1)}%</p>
+                    </div>
+                    <div className="rounded-lg border border-gray-200 bg-white p-3 text-center">
+                      <p className="text-xs text-gray-500">Affected URLs</p>
+                      <p className="text-xl font-bold text-gray-700">
+                        {Object.values(results.urlBreakdown).filter((u: any) => u.successRate < 100).length}
+                      </p>
+                    </div>
+                  </div>
+                  {phases.length > 0 && (
+                    <ResponsiveContainer width="100%" height={200}>
+                      <BarChart data={phases.map(p => ({ phase: `Ph ${p.phase}`, errors: p.errorCount }))}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                        <XAxis dataKey="phase" stroke="#6b7280" tick={{ fontSize: 12 }} />
+                        <YAxis stroke="#6b7280" allowDecimals={false} />
+                        <Tooltip contentStyle={{ borderRadius: 8 }} />
+                        <Bar dataKey="errors" name="Errors" fill="#ef4444" radius={[4,4,0,0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
        {/* <div className="mb-6">
         <Card className="border-gray-200">
