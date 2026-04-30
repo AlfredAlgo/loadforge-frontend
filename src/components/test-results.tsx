@@ -1,10 +1,13 @@
 "use client"
 
-import { useState } from "react"
+import { useRef, useState } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "~/components/ui/card"
 import { Badge } from "~/components/ui/badge"
 import { Button } from "~/components/ui/button"
-import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts"
+import {
+  LineChart, Line, BarChart, Bar,
+  XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
+} from "recharts"
 import { CheckCircle2, Clock, TrendingUp, AlertCircle, ChevronDown, FileDown } from "lucide-react"
 
 interface TestResultsProps {
@@ -47,15 +50,21 @@ interface TestResultsProps {
     successRate: number;
   }>;
 }
-export const  TestResults: React.FC<TestResultsProps> = ({ results, phases }) => {
+
+export const TestResults: React.FC<TestResultsProps> = ({ results, phases }) => {
   const [activeMetric, setActiveMetric] = useState<string | null>(null)
   const [expandedUrls, setExpandedUrls] = useState<Set<string>>(new Set())
   const [exporting, setExporting] = useState(false)
 
+  // Refs for PDF chart capture
+  const pdfResponseRef = useRef<HTMLDivElement>(null)
+  const pdfRequestsRef = useRef<HTMLDivElement>(null)
+  const pdfSuccessRef = useRef<HTMLDivElement>(null)
+
   const overallSuccessRate = results.totalRequests
     ? (results.successfulRequests / results.totalRequests) * 100
-    : 0;
-  const isSuccess = overallSuccessRate >= 99;
+    : 0
+  const isSuccess = overallSuccessRate >= 99
 
   const toggleUrl = (url: string) => {
     setExpandedUrls(prev => {
@@ -65,90 +74,193 @@ export const  TestResults: React.FC<TestResultsProps> = ({ results, phases }) =>
     })
   }
 
+  const performanceData = phases.length > 0
+    ? phases.map(p => ({
+        phase: `Phase ${p.phase}`,
+        p50: p.percentiles.p50,
+        p95: p.percentiles.p95,
+        p99: p.percentiles.p99,
+        concurrency: p.concurrency,
+        successRate: p.successRate,
+        requests: p.requests,
+      }))
+    : [
+        { phase: "Ramp Up",   p50: results.phaseMetrics.rampUp.percentiles.p50,   p95: results.phaseMetrics.rampUp.percentiles.p95,   p99: results.phaseMetrics.rampUp.percentiles.p99,   concurrency: results.phaseMetrics.rampUp.concurrency,   requests: results.phaseMetrics.rampUp.requests },
+        { phase: "Steady",    p50: results.phaseMetrics.steady.percentiles.p50,    p95: results.phaseMetrics.steady.percentiles.p95,    p99: results.phaseMetrics.steady.percentiles.p99,    concurrency: results.phaseMetrics.steady.concurrency,    requests: results.phaseMetrics.steady.requests },
+        { phase: "Ramp Down", p50: results.phaseMetrics.rampDown.percentiles.p50, p95: results.phaseMetrics.rampDown.percentiles.p95, p99: results.phaseMetrics.rampDown.percentiles.p99, concurrency: results.phaseMetrics.rampDown.concurrency, requests: results.phaseMetrics.rampDown.requests },
+      ]
+
+  // ─── PDF Export ────────────────────────────────────────────────────────────
   const exportToPDF = async () => {
     setExporting(true)
     try {
       const { jsPDF } = await import('jspdf')
       const { default: autoTable } = await import('jspdf-autotable')
-      const doc = new jsPDF()
+      const { default: html2canvas } = await import('html2canvas')
 
-      const purple: [number, number, number] = [147, 51, 234]
-      const gray: [number, number, number] = [75, 85, 99]
+      const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
 
-      // Header
-      doc.setFillColor(...purple)
-      doc.rect(0, 0, 210, 28, 'F')
-      doc.setTextColor(255, 255, 255)
-      doc.setFontSize(18)
+      // Gauteng Provincial Government palette
+      const navy:    [number, number, number] = [27,  58,  107]
+      const gold:    [number, number, number] = [200, 162,  50]
+      const charcoal:[number, number, number] = [44,  44,   44]
+      const rowAlt:  [number, number, number] = [245, 247, 250]
+      const white:   [number, number, number] = [255, 255, 255]
+      const pageW = 210
+
+      // ── Capture chart images ─────────────────────────────────────────────
+      const captureChart = async (ref: React.RefObject<HTMLDivElement | null>): Promise<string | null> => {
+        if (!ref.current) return null
+        try {
+          const canvas = await html2canvas(ref.current, {
+            scale: 2,
+            backgroundColor: '#ffffff',
+            useCORS: true,
+            logging: false,
+          })
+          return canvas.toDataURL('image/png')
+        } catch { return null }
+      }
+
+      const [responseTimeImg, requestsImg, successRateImg] = await Promise.all([
+        captureChart(pdfResponseRef),
+        captureChart(pdfRequestsRef),
+        captureChart(pdfSuccessRef),
+      ])
+
+      // ── Load logo ────────────────────────────────────────────────────────
+      let logoDataUrl: string | null = null
+      try {
+        const resp = await fetch('/gauteng-logo.png')
+        if (resp.ok) {
+          const blob = await resp.blob()
+          logoDataUrl = await new Promise<string>(res => {
+            const reader = new FileReader()
+            reader.onloadend = () => res(reader.result as string)
+            reader.readAsDataURL(blob)
+          })
+        }
+      } catch { /* logo unavailable */ }
+
+      // ── Section heading helper ────────────────────────────────────────────
+      const sectionHeading = (text: string, y: number) => {
+        doc.setTextColor(...navy)
+        doc.setFontSize(10)
+        doc.setFont('helvetica', 'bold')
+        doc.text(text, 14, y)
+        doc.setDrawColor(...gold)
+        doc.setLineWidth(0.6)
+        doc.line(14, y + 1.5, pageW - 14, y + 1.5)
+        doc.setTextColor(...charcoal)
+      }
+
+      // ── Inner page band (non-cover pages) ────────────────────────────────
+      const pageBand = (title: string) => {
+        doc.setFillColor(...navy)
+        doc.rect(0, 0, pageW, 12, 'F')
+        doc.setFillColor(...gold)
+        doc.rect(0, 12, pageW, 1, 'F')
+        doc.setTextColor(...white)
+        doc.setFontSize(8.5)
+        doc.setFont('helvetica', 'bold')
+        doc.text(title, 14, 8.5)
+        doc.setTextColor(...charcoal)
+      }
+
+      // ══════════════════════════════════════════════════════════════════════
+      // PAGE 1 — COVER + SUMMARY
+      // ══════════════════════════════════════════════════════════════════════
+
+      // Navy header band
+      doc.setFillColor(...navy)
+      doc.rect(0, 0, pageW, 44, 'F')
+      doc.setFillColor(...gold)
+      doc.rect(0, 44, pageW, 1.5, 'F')
+
+      // Logo (left side of header)
+      if (logoDataUrl) {
+        doc.addImage(logoDataUrl, 'PNG', 8, 4, 54, 34)
+      }
+
+      // Vertical gold divider
+      doc.setDrawColor(...gold)
+      doc.setLineWidth(0.4)
+      doc.line(70, 6, 70, 40)
+
+      // Report title (right portion of header)
+      doc.setTextColor(...white)
+      doc.setFontSize(14)
       doc.setFont('helvetica', 'bold')
-      doc.text('LoadForge Performance Report', 14, 12)
-      doc.setFontSize(9)
+      doc.text('Performance Test Report', 143, 15, { align: 'center' })
+      doc.setFontSize(7.5)
       doc.setFont('helvetica', 'normal')
-      doc.text(`Generated: ${new Date().toLocaleString()}`, 14, 20)
-      doc.text(`Test ID: ${results.testId ?? 'N/A'}`, 14, 25)
-
-      // Status badge
-      const statusColor: [number, number, number] = isSuccess ? [22, 163, 74] : [220, 38, 38]
-      doc.setFillColor(...statusColor)
-      doc.roundedRect(160, 8, 36, 10, 3, 3, 'F')
-      doc.setTextColor(255, 255, 255)
-      doc.setFontSize(9)
+      doc.text('Gauteng Provincial Government', 143, 21, { align: 'center' })
+      doc.setFontSize(7)
+      doc.text(`Generated: ${new Date().toLocaleString()}`, 143, 28, { align: 'center' })
+      doc.text(`Test ID: ${results.testId ?? 'N/A'}`, 143, 33, { align: 'center' })
+      doc.setFontSize(7.5)
       doc.setFont('helvetica', 'bold')
-      doc.text(isSuccess ? '✓ SUCCESS' : '✗ FAILED', 178, 14.5, { align: 'center' })
+      doc.text(
+        `Status: ${isSuccess ? 'COMPLETED — ALL REQUESTS PASSED' : 'COMPLETED — REQUESTS WITH FAILURES'}`,
+        143, 40, { align: 'center' }
+      )
 
-      // Overview metrics
-      doc.setTextColor(...gray)
-      doc.setFontSize(13)
-      doc.setFont('helvetica', 'bold')
-      doc.text('Overview', 14, 40)
+      // ── Overview metrics table (left) + Percentiles table (right) ─────────
+      sectionHeading('Test Overview', 53)
+
       autoTable(doc, {
-        startY: 44,
+        startY: 57,
         head: [['Metric', 'Value']],
         body: [
-          ['Total Requests', results.totalRequests.toLocaleString()],
+          ['Total Requests',      results.totalRequests.toLocaleString()],
           ['Successful Requests', results.successfulRequests.toLocaleString()],
-          ['Failed Requests', results.failedRequests.toLocaleString()],
-          ['Success Rate', `${overallSuccessRate.toFixed(1)}%`],
-          ['Avg Response Time', `${results.avgResponseTime}ms`],
-          ['Requests / Second', String(results.requestsPerSecond)],
+          ['Failed Requests',     results.failedRequests.toLocaleString()],
+          ['Success Rate',        `${overallSuccessRate.toFixed(1)}%`],
+          ['Avg Response Time',   `${results.avgResponseTime} ms`],
+          ['Requests / Second',   String(results.requestsPerSecond)],
+          ['Test Status',         isSuccess ? 'Passed' : 'Failed'],
         ],
-        headStyles: { fillColor: purple },
-        alternateRowStyles: { fillColor: [249, 250, 251] },
-        margin: { left: 14, right: 14 },
-        tableWidth: 90,
+        headStyles: { fillColor: navy, textColor: white, fontStyle: 'bold', fontSize: 8 },
+        bodyStyles: { fontSize: 8, textColor: charcoal },
+        alternateRowStyles: { fillColor: rowAlt },
+        margin: { left: 14, right: 112 },
+        tableWidth: 84,
       })
 
-      // Response time percentiles
-      const overviewEnd = (doc as any).lastAutoTable.finalY
-      doc.setTextColor(...gray)
-      doc.setFontSize(13)
-      doc.setFont('helvetica', 'bold')
-      doc.text('Response Time Percentiles', 115, 40)
       autoTable(doc, {
-        startY: 44,
+        startY: 57,
         head: [['Percentile', 'Time (ms)']],
         body: [
-          ['Minimum', `${results.minResponseTime}ms`],
-          ['P50 — Median', `${results.p50ResponseTime}ms`],
-          ['P95', `${results.p95ResponseTime}ms`],
-          ['P99', `${results.p99ResponseTime}ms`],
-          ['Maximum', `${results.maxResponseTime}ms`],
+          ['Minimum',     `${results.minResponseTime} ms`],
+          ['P50 — Median',`${results.p50ResponseTime} ms`],
+          ['P95',         `${results.p95ResponseTime} ms`],
+          ['P99',         `${results.p99ResponseTime} ms`],
+          ['Maximum',     `${results.maxResponseTime} ms`],
         ],
-        headStyles: { fillColor: purple },
-        alternateRowStyles: { fillColor: [249, 250, 251] },
-        margin: { left: 115, right: 14 },
-        tableWidth: 81,
+        headStyles: { fillColor: navy, textColor: white, fontStyle: 'bold', fontSize: 8 },
+        bodyStyles: { fontSize: 8, textColor: charcoal },
+        alternateRowStyles: { fillColor: rowAlt },
+        margin: { left: 112, right: 14 },
+        tableWidth: 84,
       })
 
-      // Phase breakdown
-      const afterOverview = Math.max(overviewEnd, (doc as any).lastAutoTable.finalY) + 10
+      // ── Response time chart (page 1) ──────────────────────────────────────
+      const afterP1Tables = (doc as any).lastAutoTable.finalY + 10
+      if (responseTimeImg) {
+        sectionHeading('Response Time by Phase (ms)', afterP1Tables)
+        doc.addImage(responseTimeImg, 'PNG', 14, afterP1Tables + 6, 182, 62)
+      }
+
+      // ══════════════════════════════════════════════════════════════════════
+      // PAGE 2 — PHASE BREAKDOWN
+      // ══════════════════════════════════════════════════════════════════════
+
       if (phases.length > 0) {
-        doc.setTextColor(...gray)
-        doc.setFontSize(13)
-        doc.setFont('helvetica', 'bold')
-        doc.text('Phase Breakdown', 14, afterOverview)
+        doc.addPage()
+        pageBand('Phase Breakdown')
+
         autoTable(doc, {
-          startY: afterOverview + 4,
+          startY: 17,
           head: [['Phase', 'Concurrency', 'Requests', 'Success', 'Errors', 'Success Rate', 'P50', 'P95', 'P99']],
           body: phases.map(p => [
             `Phase ${p.phase}`,
@@ -157,66 +269,89 @@ export const  TestResults: React.FC<TestResultsProps> = ({ results, phases }) =>
             p.successCount,
             p.errorCount,
             `${p.successRate.toFixed(1)}%`,
-            `${p.percentiles.p50}ms`,
-            `${p.percentiles.p95}ms`,
-            `${p.percentiles.p99}ms`,
+            `${p.percentiles.p50} ms`,
+            `${p.percentiles.p95} ms`,
+            `${p.percentiles.p99} ms`,
           ]),
-          headStyles: { fillColor: purple, fontSize: 8 },
-          bodyStyles: { fontSize: 8 },
-          alternateRowStyles: { fillColor: [249, 250, 251] },
+          headStyles: { fillColor: navy, textColor: white, fontStyle: 'bold', fontSize: 7.5 },
+          bodyStyles: { fontSize: 7.5, textColor: charcoal },
+          alternateRowStyles: { fillColor: rowAlt },
           margin: { left: 14, right: 14 },
         })
+
+        const afterPhaseTable = (doc as any).lastAutoTable.finalY + 10
+
+        if (requestsImg || successRateImg) {
+          const chartTop = afterPhaseTable
+
+          if (requestsImg) {
+            sectionHeading('Requests per Phase', chartTop)
+            doc.addImage(requestsImg, 'PNG', 14, chartTop + 6, 88, 55)
+          }
+
+          if (successRateImg) {
+            doc.setTextColor(...navy)
+            doc.setFontSize(10)
+            doc.setFont('helvetica', 'bold')
+            doc.text('Success Rate per Phase', 112, chartTop)
+            doc.setDrawColor(...gold)
+            doc.setLineWidth(0.6)
+            doc.line(112, chartTop + 1.5, pageW - 14, chartTop + 1.5)
+            doc.addImage(successRateImg, 'PNG', 112, chartTop + 6, 84, 55)
+          }
+        }
       }
 
-      // URL breakdown
+      // ══════════════════════════════════════════════════════════════════════
+      // PAGE 3+ — URL BREAKDOWN
+      // ══════════════════════════════════════════════════════════════════════
+
       const urlEntries = Object.entries(results.urlBreakdown ?? {})
       if (urlEntries.length > 0) {
         doc.addPage()
-        doc.setFillColor(...purple)
-        doc.rect(0, 0, 210, 16, 'F')
-        doc.setTextColor(255, 255, 255)
-        doc.setFontSize(13)
-        doc.setFont('helvetica', 'bold')
-        doc.text('Performance by URL', 14, 11)
+        pageBand('Performance by URL')
 
         autoTable(doc, {
-          startY: 22,
-          head: [['URL', 'Requests', 'Avg Time', 'Success Rate']],
+          startY: 17,
+          head: [['URL', 'Requests', 'Avg Response Time', 'Success Rate']],
           body: urlEntries.map(([url, m]: any) => [
-            url.length > 55 ? url.slice(0, 52) + '…' : url,
+            url.length > 62 ? url.slice(0, 59) + '…' : url,
             m.requests ?? 0,
-            `${m.avgResponseTime ?? 0}ms`,
+            `${m.avgResponseTime ?? 0} ms`,
             `${Number(m.successRate ?? 0).toFixed(1)}%`,
           ]),
-          headStyles: { fillColor: purple },
-          alternateRowStyles: { fillColor: [249, 250, 251] },
-          columnStyles: { 0: { cellWidth: 90 } },
+          headStyles: { fillColor: navy, textColor: white, fontStyle: 'bold', fontSize: 8 },
+          bodyStyles: { fontSize: 7.5, textColor: charcoal },
+          alternateRowStyles: { fillColor: rowAlt },
+          columnStyles: { 0: { cellWidth: 105 } },
           margin: { left: 14, right: 14 },
         })
 
-        // Error details section
+        // Error details per URL
         const urlsWithErrors = urlEntries.filter(([, m]: any) => Array.isArray(m.errors) && m.errors.length > 0)
         if (urlsWithErrors.length > 0) {
           let y = (doc as any).lastAutoTable.finalY + 12
-          doc.setTextColor(...gray)
-          doc.setFontSize(13)
-          doc.setFont('helvetica', 'bold')
-          doc.text('Error Details by URL', 14, y)
-          y += 6
+          sectionHeading('Error Details by URL', y)
+          y += 8
 
           for (const [url, m] of urlsWithErrors as any) {
-            if (y > 260) { doc.addPage(); y = 20 }
-            doc.setFontSize(9)
+            if (y > 265) {
+              doc.addPage()
+              pageBand('Error Details by URL — continued')
+              y = 20
+            }
+            doc.setFontSize(7.5)
             doc.setFont('helvetica', 'bold')
-            doc.setTextColor(...gray)
-            doc.text(url.length > 80 ? url.slice(0, 77) + '…' : url, 14, y)
+            doc.setTextColor(...charcoal)
+            doc.text(url.length > 95 ? url.slice(0, 92) + '…' : url, 14, y)
             y += 4
             autoTable(doc, {
               startY: y,
               head: [['Status Code', 'Error Message', 'Count']],
               body: (m as any).errors.map((e: any) => [e.statusCode, e.message, e.count]),
-              headStyles: { fillColor: [220, 38, 38], fontSize: 8 },
-              bodyStyles: { fontSize: 8 },
+              headStyles: { fillColor: [80, 80, 80] as [number, number, number], textColor: white, fontSize: 7.5 },
+              bodyStyles: { fontSize: 7.5, textColor: charcoal },
+              alternateRowStyles: { fillColor: rowAlt },
               margin: { left: 14, right: 14 },
             })
             y = (doc as any).lastAutoTable.finalY + 8
@@ -224,72 +359,44 @@ export const  TestResults: React.FC<TestResultsProps> = ({ results, phases }) =>
         }
       }
 
-      // Footer on each page
+      // ── Footers (all pages) ───────────────────────────────────────────────
       const pageCount = doc.getNumberOfPages()
       for (let i = 1; i <= pageCount; i++) {
         doc.setPage(i)
-        doc.setFontSize(8)
-        doc.setTextColor(156, 163, 175)
-        doc.text(`LoadForge — Page ${i} of ${pageCount}`, 14, 290)
-        doc.text('loadforge.azurewebsites.net', 196, 290, { align: 'right' })
+        doc.setFillColor(...navy)
+        doc.rect(0, 291, pageW, 6, 'F')
+        doc.setTextColor(...white)
+        doc.setFontSize(7)
+        doc.setFont('helvetica', 'normal')
+        doc.text(`Page ${i} of ${pageCount}`, pageW / 2, 295.5, { align: 'center' })
+        if (i === pageCount) {
+          doc.setTextColor(180, 180, 180)
+          doc.setFontSize(6)
+          doc.text('powered by AlgoAtWork', 14, 295.5)
+        }
       }
 
-      doc.save(`loadforge-report-${(results.testId ?? 'export').slice(0, 8)}.pdf`)
+      doc.save(`performance-report-${(results.testId ?? 'export').slice(0, 8)}.pdf`)
     } finally {
       setExporting(false)
     }
   }
 
+  // ─── UI ────────────────────────────────────────────────────────────────────
   const overviewMetrics = [
-    { title: "Total Requests", value: results.totalRequests.toLocaleString(), icon: TrendingUp, color: "text-purple-600", hoverBorder: "hover:border-purple-300" },
-    { title: "Avg Response Time", value: `${results.avgResponseTime}ms`, icon: Clock, color: "text-blue-600", hoverBorder: "hover:border-blue-300" },
-    { title: "Success Rate", value: `${overallSuccessRate.toFixed(1)}%`, icon: CheckCircle2, color: "text-green-600", hoverBorder: "hover:border-green-300" },
-    { title: "Errors", value: results.failedRequests.toLocaleString(), icon: AlertCircle, color: "text-red-600", hoverBorder: "hover:border-red-300" },
-  ];
-
-  // Data for the "Average Response Times by Phase" chart
-  const performanceData = phases.length > 0 ? phases.map((phase) => ({
-    phase: `Phase ${phase.phase}`,
-    p50: phase.percentiles.p50, 
-    p95: phase.percentiles.p95,
-    p99: phase.percentiles.p99,
-    concurrency: phase.concurrency,
-    successRate: phase.successRate,
-    requests: phase.requests,
-  })) : [
- { 
-  phase: "Ramp Up", 
-  p50: results.phaseMetrics.rampUp.percentiles.p50, 
-  p95: results.phaseMetrics.rampUp.percentiles.p95, 
-  p99: results.phaseMetrics.rampUp.percentiles.p99, 
-  concurrency: results.phaseMetrics.rampUp.concurrency, 
-  requests: results.phaseMetrics.rampUp.requests 
-},
-{ 
-  phase: "Steady", 
-  p50: results.phaseMetrics.steady.percentiles.p50, 
-  p95: results.phaseMetrics.steady.percentiles.p95, 
-  p99: results.phaseMetrics.steady.percentiles.p99, 
-  concurrency: results.phaseMetrics.steady.concurrency, 
-  requests: results.phaseMetrics.steady.requests 
-},
-{ 
-  phase: "Ramp Down", 
-  p50: results.phaseMetrics.rampDown.percentiles.p50, 
-  p95: results.phaseMetrics.rampDown.percentiles.p95, 
-  p99: results.phaseMetrics.rampDown.percentiles.p99, 
-  concurrency: results.phaseMetrics.rampDown.concurrency, 
-  requests: results.phaseMetrics.rampDown.requests 
-},
-  ];
+    { title: "Total Requests",    value: results.totalRequests.toLocaleString(), icon: TrendingUp,  color: "text-purple-600",  hoverBorder: "hover:border-purple-300" },
+    { title: "Avg Response Time", value: `${results.avgResponseTime}ms`,          icon: Clock,        color: "text-blue-600",    hoverBorder: "hover:border-blue-300"   },
+    { title: "Success Rate",      value: `${overallSuccessRate.toFixed(1)}%`,      icon: CheckCircle2, color: "text-green-600",   hoverBorder: "hover:border-green-300"  },
+    { title: "Errors",            value: results.failedRequests.toLocaleString(), icon: AlertCircle,  color: "text-red-600",     hoverBorder: "hover:border-red-300"    },
+  ]
 
   return (
     <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-     <div className="mb-8">
+      {/* Page header */}
+      <div className="mb-8">
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-3xl font-bold text-gray-900">Test Results for Test ID: {results.testId || 'N/A'}</h1>
-            {/* If test name and completion time were available from the API, you'd use them here */}
             <p className="mt-1 text-sm text-gray-600">Overview of performance metrics</p>
           </div>
           <div className="flex items-center gap-3">
@@ -310,7 +417,8 @@ export const  TestResults: React.FC<TestResultsProps> = ({ results, phases }) =>
         </div>
       </div>
 
-     <div className="mb-2 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      {/* Metric cards */}
+      <div className="mb-2 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {overviewMetrics.map((metric) => {
           const Icon = metric.icon
           const isOpen = activeMetric === metric.title
@@ -380,11 +488,11 @@ export const  TestResults: React.FC<TestResultsProps> = ({ results, phases }) =>
               <h3 className="font-semibold text-gray-900">Response Time Breakdown</h3>
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
                 {[
-                  { label: "Min", value: results.minResponseTime, color: "text-green-600" },
-                  { label: "P50 (Median)", value: results.p50ResponseTime, color: "text-blue-600" },
-                  { label: "P95", value: results.p95ResponseTime, color: "text-yellow-600" },
-                  { label: "P99", value: results.p99ResponseTime, color: "text-orange-600" },
-                  { label: "Max", value: results.maxResponseTime, color: "text-red-600" },
+                  { label: "Min",        value: results.minResponseTime, color: "text-green-600"  },
+                  { label: "P50 (Median)",value: results.p50ResponseTime, color: "text-blue-600"   },
+                  { label: "P95",        value: results.p95ResponseTime, color: "text-yellow-600" },
+                  { label: "P99",        value: results.p99ResponseTime, color: "text-orange-600" },
+                  { label: "Max",        value: results.maxResponseTime, color: "text-red-600"    },
                 ].map(({ label, value, color }) => (
                   <div key={label} className="rounded-lg border border-gray-200 bg-white p-3 text-center">
                     <p className="text-xs text-gray-500">{label}</p>
@@ -480,57 +588,33 @@ export const  TestResults: React.FC<TestResultsProps> = ({ results, phases }) =>
         </div>
       )}
 
-       {/* <div className="mb-6">
-        <Card className="border-gray-200">
-          <CardHeader>
-            <CardTitle className="text-gray-900">Average Response Times by Phase</CardTitle>
-            <CardDescription className="text-gray-600">Performance metrics across test phases</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <ResponsiveContainer width="100%" height={300}>
-              <LineChart data={performanceData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                <XAxis dataKey="phase" stroke="#6b7280" />
-                <YAxis stroke="#6b7280" />
-                <Tooltip
-                  contentStyle={{ backgroundColor: "#ffffff", border: "1px solid #e5e7eb", borderRadius: "8px" }}
-                />
-                <Legend />
-                <Line type="monotone" dataKey="avgTime" stroke="#9333ea" name="Average" strokeWidth={2} />
-              </LineChart>
-            </ResponsiveContainer>
-          </CardContent>
-        </Card>
-      </div> */}
+      {/* Response Time Percentiles chart */}
+      <Card className="mb-6">
+        <CardHeader>
+          <CardTitle>Response Time Percentiles by Phase</CardTitle>
+          <CardDescription>P50, P95, P99 latencies across all test phases</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <ResponsiveContainer width="100%" height={300}>
+            <LineChart data={performanceData}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+              <XAxis dataKey="phase" stroke="#6b7280" />
+              <YAxis stroke="#6b7280" label={{ value: 'ms', angle: -90, position: 'insideLeft' }} />
+              <Tooltip contentStyle={{ backgroundColor: "#fff", border: "1px solid #e5e7eb", borderRadius: "8px" }} />
+              <Legend />
+              <Line type="monotone" dataKey="p50" stroke="#22c55e" name="P50" strokeWidth={2} />
+              <Line type="monotone" dataKey="p95" stroke="#f59e0b" name="P95" strokeWidth={2} />
+              <Line type="monotone" dataKey="p99" stroke="#ef4444" name="P99" strokeWidth={2} />
+            </LineChart>
+          </ResponsiveContainer>
+        </CardContent>
+      </Card>
 
-      <Card>
-      <CardHeader>
-        <CardTitle>Response Time Percentiles by Phase</CardTitle>
-        <CardDescription>P50, P95, P99 latencies across all test phases</CardDescription>
-      </CardHeader>
-      <CardContent>
-        <ResponsiveContainer width="100%" height={300}>
-          <LineChart data={performanceData}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-            <XAxis dataKey="phase" stroke="#6b7280" />
-            <YAxis stroke="#6b7280" label={{ value: 'ms', angle: -90, position: 'insideLeft' }} />
-            <Tooltip contentStyle={{ backgroundColor: "#fff", border: "1px solid #e5e7eb", borderRadius: "8px" }} />
-            <Legend />
-            <Line type="monotone" dataKey="p50" stroke="#22c55e" name="P50" strokeWidth={2} />
-            <Line type="monotone" dataKey="p95" stroke="#f59e0b" name="P95" strokeWidth={2} />
-            <Line type="monotone" dataKey="p99" stroke="#ef4444" name="P99" strokeWidth={2} />
-          </LineChart>
-        </ResponsiveContainer>
-      </CardContent>
-    </Card>
-
-    
+      {/* URL Breakdown */}
       <Card id="url-breakdown" className="border-gray-200 scroll-mt-8">
         <CardHeader>
           <CardTitle className="text-gray-900">Performance by URL</CardTitle>
-          <CardDescription className="text-gray-600">
-            Click any endpoint to see its error details
-          </CardDescription>
+          <CardDescription className="text-gray-600">Click any endpoint to see its error details</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="space-y-3">
@@ -555,7 +639,6 @@ export const  TestResults: React.FC<TestResultsProps> = ({ results, phases }) =>
                     key={url}
                     className={`rounded-lg border transition-all ${isOpen ? "border-purple-300 bg-purple-50/30" : "border-gray-200 bg-white hover:border-purple-200"}`}
                   >
-                    {/* Clickable header row */}
                     <button
                       onClick={() => toggleUrl(url)}
                       className="flex w-full items-center justify-between p-4 text-left"
@@ -570,10 +653,8 @@ export const  TestResults: React.FC<TestResultsProps> = ({ results, phases }) =>
                       </div>
                     </button>
 
-                    {/* Expanded details */}
                     {isOpen && (
                       <div className="border-t border-gray-200 px-4 pb-4 pt-3">
-                        {/* Stats row */}
                         <div className="mb-4 grid grid-cols-3 gap-3 sm:grid-cols-4">
                           <div className="rounded-lg border border-gray-200 bg-white p-3 text-center">
                             <p className="text-xs text-gray-500">Total Requests</p>
@@ -593,7 +674,6 @@ export const  TestResults: React.FC<TestResultsProps> = ({ results, phases }) =>
                           </div>
                         </div>
 
-                        {/* Errors */}
                         {hasErrors ? (
                           <div>
                             <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-red-700">
@@ -635,6 +715,50 @@ export const  TestResults: React.FC<TestResultsProps> = ({ results, phases }) =>
           </div>
         </CardContent>
       </Card>
+
+      {/* ── Hidden chart containers for PDF capture (off-screen) ───────────── */}
+      <div style={{ position: 'fixed', left: '-9999px', top: 0, pointerEvents: 'none', zIndex: -1 }}>
+
+        {/* Response time percentile chart */}
+        <div ref={pdfResponseRef} style={{ background: 'white', padding: '12px 8px', width: '680px' }}>
+          <LineChart width={660} height={170} data={performanceData}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+            <XAxis dataKey="phase" stroke="#6b7280" tick={{ fontSize: 11 }} />
+            <YAxis stroke="#6b7280" unit="ms" tick={{ fontSize: 11 }} />
+            <Tooltip formatter={(v: any) => [`${v}ms`]} />
+            <Legend />
+            <Line type="monotone" dataKey="p50" stroke="#22c55e" name="P50" strokeWidth={2} dot={{ r: 3 }} />
+            <Line type="monotone" dataKey="p95" stroke="#f59e0b" name="P95" strokeWidth={2} dot={{ r: 3 }} />
+            <Line type="monotone" dataKey="p99" stroke="#ef4444" name="P99" strokeWidth={2} dot={{ r: 3 }} />
+          </LineChart>
+        </div>
+
+        {/* Requests per phase bar chart */}
+        <div ref={pdfRequestsRef} style={{ background: 'white', padding: '12px 8px', width: '380px' }}>
+          <BarChart width={360} height={165} data={phases.map(p => ({ phase: `Ph ${p.phase}`, requests: p.requests, concurrency: p.concurrency }))}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+            <XAxis dataKey="phase" stroke="#6b7280" tick={{ fontSize: 11 }} />
+            <YAxis stroke="#6b7280" tick={{ fontSize: 11 }} />
+            <Tooltip />
+            <Legend />
+            <Bar dataKey="requests"    name="Requests"    fill="#1B3A6B" radius={[3,3,0,0]} />
+            <Bar dataKey="concurrency" name="Concurrency" fill="#C8A232" radius={[3,3,0,0]} />
+          </BarChart>
+        </div>
+
+        {/* Success rate per phase bar chart */}
+        <div ref={pdfSuccessRef} style={{ background: 'white', padding: '12px 8px', width: '360px' }}>
+          <BarChart width={340} height={165} data={phases.map(p => ({ phase: `Ph ${p.phase}`, successRate: Number(p.successRate.toFixed(1)) }))}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+            <XAxis dataKey="phase" stroke="#6b7280" tick={{ fontSize: 11 }} />
+            <YAxis stroke="#6b7280" unit="%" domain={[0, 100]} tick={{ fontSize: 11 }} />
+            <Tooltip formatter={(v: any) => [`${v}%`, 'Success Rate']} />
+            <Legend />
+            <Bar dataKey="successRate" name="Success Rate" fill="#1B3A6B" radius={[3,3,0,0]} />
+          </BarChart>
+        </div>
+
+      </div>
     </main>
   )
 }
