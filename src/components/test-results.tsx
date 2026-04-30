@@ -9,6 +9,7 @@ import {
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from "recharts"
 import { CheckCircle2, Clock, TrendingUp, AlertCircle, ChevronDown, FileDown } from "lucide-react"
+import { gautengLogoB64 } from "~/lib/gauteng-logo-b64"
 
 interface TestResultsProps {
   results: {
@@ -51,15 +52,58 @@ interface TestResultsProps {
   }>;
 }
 
+// ── SVG → PNG helper (works reliably with Recharts' SVG output) ─────────────
+function svgToPng(svgEl: SVGSVGElement): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const w = svgEl.clientWidth || Number(svgEl.getAttribute('width') ?? 600)
+    const h = svgEl.clientHeight || Number(svgEl.getAttribute('height') ?? 200)
+
+    let svgStr = new XMLSerializer().serializeToString(svgEl)
+    if (!svgStr.includes('xmlns='))
+      svgStr = svgStr.replace('<svg', '<svg xmlns="http://www.w3.org/2000/svg"')
+
+    const blob = new Blob([svgStr], { type: 'image/svg+xml;charset=utf-8' })
+    const url  = URL.createObjectURL(blob)
+    const img  = new Image()
+
+    img.onload = () => {
+      const canvas = document.createElement('canvas')
+      canvas.width  = w * 2
+      canvas.height = h * 2
+      const ctx = canvas.getContext('2d')!
+      ctx.scale(2, 2)
+      ctx.fillStyle = '#ffffff'
+      ctx.fillRect(0, 0, w, h)
+      ctx.drawImage(img, 0, 0, w, h)
+      URL.revokeObjectURL(url)
+      resolve(canvas.toDataURL('image/png'))
+    }
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('svg load failed')) }
+    img.src = url
+  })
+}
+
+async function captureChart(ref: React.RefObject<HTMLDivElement | null>): Promise<string | null> {
+  if (!ref.current) return null
+  // Small wait to let Recharts finish its internal RAF-based render
+  await new Promise(r => setTimeout(r, 150))
+  try {
+    const svgEl = ref.current.querySelector('svg')
+    if (!svgEl) return null
+    return await svgToPng(svgEl as SVGSVGElement)
+  } catch { return null }
+}
+
 export const TestResults: React.FC<TestResultsProps> = ({ results, phases }) => {
   const [activeMetric, setActiveMetric] = useState<string | null>(null)
-  const [expandedUrls, setExpandedUrls] = useState<Set<string>>(new Set())
-  const [exporting, setExporting] = useState(false)
+  const [expandedUrls, setExpandedUrls]  = useState<Set<string>>(new Set())
+  const [exporting, setExporting]        = useState(false)
 
-  // Refs for PDF chart capture
-  const pdfResponseRef = useRef<HTMLDivElement>(null)
-  const pdfRequestsRef = useRef<HTMLDivElement>(null)
-  const pdfSuccessRef = useRef<HTMLDivElement>(null)
+  // Hidden chart refs for PDF capture
+  const pdfResponseRef = useRef<HTMLDivElement>(null)   // P50/P95/P99 line chart
+  const pdfRequestsRef = useRef<HTMLDivElement>(null)   // Requests per phase
+  const pdfSuccessRef  = useRef<HTMLDivElement>(null)   // Success rate per phase
+  const pdfErrorsRef   = useRef<HTMLDivElement>(null)   // Errors per phase
 
   const overallSuccessRate = results.totalRequests
     ? (results.successfulRequests / results.totalRequests) * 100
@@ -77,72 +121,41 @@ export const TestResults: React.FC<TestResultsProps> = ({ results, phases }) => 
   const performanceData = phases.length > 0
     ? phases.map(p => ({
         phase: `Phase ${p.phase}`,
-        p50: p.percentiles.p50,
-        p95: p.percentiles.p95,
-        p99: p.percentiles.p99,
-        concurrency: p.concurrency,
-        successRate: p.successRate,
-        requests: p.requests,
+        p50: p.percentiles.p50, p95: p.percentiles.p95, p99: p.percentiles.p99,
+        concurrency: p.concurrency, requests: p.requests, successRate: p.successRate,
       }))
     : [
-        { phase: "Ramp Up",   p50: results.phaseMetrics.rampUp.percentiles.p50,   p95: results.phaseMetrics.rampUp.percentiles.p95,   p99: results.phaseMetrics.rampUp.percentiles.p99,   concurrency: results.phaseMetrics.rampUp.concurrency,   requests: results.phaseMetrics.rampUp.requests },
-        { phase: "Steady",    p50: results.phaseMetrics.steady.percentiles.p50,    p95: results.phaseMetrics.steady.percentiles.p95,    p99: results.phaseMetrics.steady.percentiles.p99,    concurrency: results.phaseMetrics.steady.concurrency,    requests: results.phaseMetrics.steady.requests },
-        { phase: "Ramp Down", p50: results.phaseMetrics.rampDown.percentiles.p50, p95: results.phaseMetrics.rampDown.percentiles.p95, p99: results.phaseMetrics.rampDown.percentiles.p99, concurrency: results.phaseMetrics.rampDown.concurrency, requests: results.phaseMetrics.rampDown.requests },
+        { phase: "Ramp Up",   p50: results.phaseMetrics.rampUp.percentiles.p50,   p95: results.phaseMetrics.rampUp.percentiles.p95,   p99: results.phaseMetrics.rampUp.percentiles.p99,   concurrency: results.phaseMetrics.rampUp.concurrency,   requests: results.phaseMetrics.rampUp.requests,   successRate: 0 },
+        { phase: "Steady",    p50: results.phaseMetrics.steady.percentiles.p50,    p95: results.phaseMetrics.steady.percentiles.p95,    p99: results.phaseMetrics.steady.percentiles.p99,    concurrency: results.phaseMetrics.steady.concurrency,    requests: results.phaseMetrics.steady.requests,    successRate: 0 },
+        { phase: "Ramp Down", p50: results.phaseMetrics.rampDown.percentiles.p50, p95: results.phaseMetrics.rampDown.percentiles.p95, p99: results.phaseMetrics.rampDown.percentiles.p99, concurrency: results.phaseMetrics.rampDown.concurrency, requests: results.phaseMetrics.rampDown.requests, successRate: 0 },
       ]
 
-  // ─── PDF Export ────────────────────────────────────────────────────────────
+  // ─── PDF Export ─────────────────────────────────────────────────────────────
   const exportToPDF = async () => {
     setExporting(true)
     try {
-      const { jsPDF } = await import('jspdf')
+      const { jsPDF }           = await import('jspdf')
       const { default: autoTable } = await import('jspdf-autotable')
-      const { default: html2canvas } = await import('html2canvas')
 
-      const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
+      const doc    = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
+      const pageW  = 210
 
       // Gauteng Provincial Government palette
-      const navy:    [number, number, number] = [27,  58,  107]
-      const gold:    [number, number, number] = [200, 162,  50]
-      const charcoal:[number, number, number] = [44,  44,   44]
-      const rowAlt:  [number, number, number] = [245, 247, 250]
-      const white:   [number, number, number] = [255, 255, 255]
-      const pageW = 210
+      const navy:    [number,number,number] = [27,  58, 107]
+      const gold:    [number,number,number] = [200,162,  50]
+      const charcoal:[number,number,number] = [44,  44,  44]
+      const rowAlt:  [number,number,number] = [245,247, 250]
+      const white:   [number,number,number] = [255,255, 255]
 
-      // ── Capture chart images ─────────────────────────────────────────────
-      const captureChart = async (ref: React.RefObject<HTMLDivElement | null>): Promise<string | null> => {
-        if (!ref.current) return null
-        try {
-          const canvas = await html2canvas(ref.current, {
-            scale: 2,
-            backgroundColor: '#ffffff',
-            useCORS: true,
-            logging: false,
-          })
-          return canvas.toDataURL('image/png')
-        } catch { return null }
-      }
-
-      const [responseTimeImg, requestsImg, successRateImg] = await Promise.all([
+      // ── Capture all charts in parallel ──────────────────────────────────
+      const [responseTimeImg, requestsImg, successImg, errorsImg] = await Promise.all([
         captureChart(pdfResponseRef),
         captureChart(pdfRequestsRef),
         captureChart(pdfSuccessRef),
+        captureChart(pdfErrorsRef),
       ])
 
-      // ── Load logo ────────────────────────────────────────────────────────
-      let logoDataUrl: string | null = null
-      try {
-        const resp = await fetch('/gauteng-logo.png')
-        if (resp.ok) {
-          const blob = await resp.blob()
-          logoDataUrl = await new Promise<string>(res => {
-            const reader = new FileReader()
-            reader.onloadend = () => res(reader.result as string)
-            reader.readAsDataURL(blob)
-          })
-        }
-      } catch { /* logo unavailable */ }
-
-      // ── Section heading helper ────────────────────────────────────────────
+      // ── Helpers ──────────────────────────────────────────────────────────
       const sectionHeading = (text: string, y: number) => {
         doc.setTextColor(...navy)
         doc.setFontSize(10)
@@ -154,7 +167,6 @@ export const TestResults: React.FC<TestResultsProps> = ({ results, phases }) => 
         doc.setTextColor(...charcoal)
       }
 
-      // ── Inner page band (non-cover pages) ────────────────────────────────
       const pageBand = (title: string) => {
         doc.setFillColor(...navy)
         doc.rect(0, 0, pageW, 12, 'F')
@@ -167,27 +179,44 @@ export const TestResults: React.FC<TestResultsProps> = ({ results, phases }) => 
         doc.setTextColor(...charcoal)
       }
 
+      const addChart = (img: string | null, x: number, y: number, w: number, h: number, title: string) => {
+        doc.setTextColor(...navy)
+        doc.setFontSize(9)
+        doc.setFont('helvetica', 'bold')
+        doc.text(title, x, y)
+        doc.setDrawColor(...gold)
+        doc.setLineWidth(0.5)
+        doc.line(x, y + 1.5, x + w, y + 1.5)
+        if (img) {
+          doc.addImage(img, 'PNG', x, y + 4, w, h)
+        } else {
+          doc.setFontSize(7.5)
+          doc.setFont('helvetica', 'italic')
+          doc.setTextColor(160, 160, 160)
+          doc.text('Chart unavailable', x + w / 2, y + h / 2 + 4, { align: 'center' })
+        }
+        doc.setTextColor(...charcoal)
+      }
+
       // ══════════════════════════════════════════════════════════════════════
-      // PAGE 1 — COVER + SUMMARY
+      // PAGE 1 — COVER + SUMMARY TABLES
       // ══════════════════════════════════════════════════════════════════════
 
-      // Navy header band
+      // Navy header
       doc.setFillColor(...navy)
       doc.rect(0, 0, pageW, 44, 'F')
       doc.setFillColor(...gold)
       doc.rect(0, 44, pageW, 1.5, 'F')
 
-      // Logo (left side of header)
-      if (logoDataUrl) {
-        doc.addImage(logoDataUrl, 'PNG', 8, 4, 54, 34)
-      }
+      // Logo (embedded base64 — no fetch needed)
+      doc.addImage(gautengLogoB64, 'PNG', 8, 4, 54, 34)
 
-      // Vertical gold divider
+      // Divider
       doc.setDrawColor(...gold)
       doc.setLineWidth(0.4)
       doc.line(70, 6, 70, 40)
 
-      // Report title (right portion of header)
+      // Title block
       doc.setTextColor(...white)
       doc.setFontSize(14)
       doc.setFont('helvetica', 'bold')
@@ -197,7 +226,7 @@ export const TestResults: React.FC<TestResultsProps> = ({ results, phases }) => 
       doc.text('Gauteng Provincial Government', 143, 21, { align: 'center' })
       doc.setFontSize(7)
       doc.text(`Generated: ${new Date().toLocaleString()}`, 143, 28, { align: 'center' })
-      doc.text(`Test ID: ${results.testId ?? 'N/A'}`, 143, 33, { align: 'center' })
+      doc.text(`Test ID: ${results.testId ?? 'N/A'}`, 143, 34, { align: 'center' })
       doc.setFontSize(7.5)
       doc.setFont('helvetica', 'bold')
       doc.text(
@@ -205,7 +234,7 @@ export const TestResults: React.FC<TestResultsProps> = ({ results, phases }) => 
         143, 40, { align: 'center' }
       )
 
-      // ── Overview metrics table (left) + Percentiles table (right) ─────────
+      // Overview + Percentiles tables (side by side)
       sectionHeading('Test Overview', 53)
 
       autoTable(doc, {
@@ -231,11 +260,11 @@ export const TestResults: React.FC<TestResultsProps> = ({ results, phases }) => 
         startY: 57,
         head: [['Percentile', 'Time (ms)']],
         body: [
-          ['Minimum',     `${results.minResponseTime} ms`],
-          ['P50 — Median',`${results.p50ResponseTime} ms`],
-          ['P95',         `${results.p95ResponseTime} ms`],
-          ['P99',         `${results.p99ResponseTime} ms`],
-          ['Maximum',     `${results.maxResponseTime} ms`],
+          ['Minimum',      `${results.minResponseTime} ms`],
+          ['P50 — Median', `${results.p50ResponseTime} ms`],
+          ['P95',          `${results.p95ResponseTime} ms`],
+          ['P99',          `${results.p99ResponseTime} ms`],
+          ['Maximum',      `${results.maxResponseTime} ms`],
         ],
         headStyles: { fillColor: navy, textColor: white, fontStyle: 'bold', fontSize: 8 },
         bodyStyles: { fontSize: 8, textColor: charcoal },
@@ -244,66 +273,47 @@ export const TestResults: React.FC<TestResultsProps> = ({ results, phases }) => 
         tableWidth: 84,
       })
 
-      // ── Response time chart (page 1) ──────────────────────────────────────
-      const afterP1Tables = (doc as any).lastAutoTable.finalY + 10
-      if (responseTimeImg) {
-        sectionHeading('Response Time by Phase (ms)', afterP1Tables)
-        doc.addImage(responseTimeImg, 'PNG', 14, afterP1Tables + 6, 182, 62)
-      }
+      // Response time chart (full width, bottom of page 1)
+      const afterTables = (doc as any).lastAutoTable.finalY + 10
+      addChart(responseTimeImg, 14, afterTables, 182, 65, 'Response Time by Phase — P50 / P95 / P99 (ms)')
 
       // ══════════════════════════════════════════════════════════════════════
-      // PAGE 2 — PHASE BREAKDOWN
+      // PAGE 2 — PHASE BREAKDOWN + CHARTS
       // ══════════════════════════════════════════════════════════════════════
+
+      doc.addPage()
+      pageBand('Phase Breakdown')
 
       if (phases.length > 0) {
-        doc.addPage()
-        pageBand('Phase Breakdown')
-
         autoTable(doc, {
           startY: 17,
           head: [['Phase', 'Concurrency', 'Requests', 'Success', 'Errors', 'Success Rate', 'P50', 'P95', 'P99']],
           body: phases.map(p => [
-            `Phase ${p.phase}`,
-            p.concurrency,
-            p.requests,
-            p.successCount,
-            p.errorCount,
+            `Phase ${p.phase}`, p.concurrency, p.requests, p.successCount, p.errorCount,
             `${p.successRate.toFixed(1)}%`,
-            `${p.percentiles.p50} ms`,
-            `${p.percentiles.p95} ms`,
-            `${p.percentiles.p99} ms`,
+            `${p.percentiles.p50} ms`, `${p.percentiles.p95} ms`, `${p.percentiles.p99} ms`,
           ]),
           headStyles: { fillColor: navy, textColor: white, fontStyle: 'bold', fontSize: 7.5 },
           bodyStyles: { fontSize: 7.5, textColor: charcoal },
           alternateRowStyles: { fillColor: rowAlt },
           margin: { left: 14, right: 14 },
         })
+      }
 
-        const afterPhaseTable = (doc as any).lastAutoTable.finalY + 10
+      const chartTop = phases.length > 0 ? (doc as any).lastAutoTable.finalY + 10 : 20
 
-        if (requestsImg || successRateImg) {
-          const chartTop = afterPhaseTable
+      // Row 1: Requests (left) + Success Rate (right)
+      addChart(requestsImg,   14,  chartTop,      90, 55, 'Total Requests per Phase')
+      addChart(successImg,   112,  chartTop,      84, 55, 'Success Rate per Phase (%)')
 
-          if (requestsImg) {
-            sectionHeading('Requests per Phase', chartTop)
-            doc.addImage(requestsImg, 'PNG', 14, chartTop + 6, 88, 55)
-          }
-
-          if (successRateImg) {
-            doc.setTextColor(...navy)
-            doc.setFontSize(10)
-            doc.setFont('helvetica', 'bold')
-            doc.text('Success Rate per Phase', 112, chartTop)
-            doc.setDrawColor(...gold)
-            doc.setLineWidth(0.6)
-            doc.line(112, chartTop + 1.5, pageW - 14, chartTop + 1.5)
-            doc.addImage(successRateImg, 'PNG', 112, chartTop + 6, 84, 55)
-          }
-        }
+      // Row 2: Errors (left, half width) — only if there were errors
+      const row2Top = chartTop + 65
+      if (results.failedRequests > 0) {
+        addChart(errorsImg, 14, row2Top, 90, 55, 'Errors per Phase')
       }
 
       // ══════════════════════════════════════════════════════════════════════
-      // PAGE 3+ — URL BREAKDOWN
+      // PAGE 3 — URL BREAKDOWN
       // ══════════════════════════════════════════════════════════════════════
 
       const urlEntries = Object.entries(results.urlBreakdown ?? {})
@@ -327,7 +337,7 @@ export const TestResults: React.FC<TestResultsProps> = ({ results, phases }) => 
           margin: { left: 14, right: 14 },
         })
 
-        // Error details per URL
+        // Error details
         const urlsWithErrors = urlEntries.filter(([, m]: any) => Array.isArray(m.errors) && m.errors.length > 0)
         if (urlsWithErrors.length > 0) {
           let y = (doc as any).lastAutoTable.finalY + 12
@@ -349,7 +359,7 @@ export const TestResults: React.FC<TestResultsProps> = ({ results, phases }) => 
               startY: y,
               head: [['Status Code', 'Error Message', 'Count']],
               body: (m as any).errors.map((e: any) => [e.statusCode, e.message, e.count]),
-              headStyles: { fillColor: [80, 80, 80] as [number, number, number], textColor: white, fontSize: 7.5 },
+              headStyles: { fillColor: [80,80,80] as [number,number,number], textColor: white, fontSize: 7.5 },
               bodyStyles: { fontSize: 7.5, textColor: charcoal },
               alternateRowStyles: { fillColor: rowAlt },
               margin: { left: 14, right: 14 },
@@ -359,7 +369,7 @@ export const TestResults: React.FC<TestResultsProps> = ({ results, phases }) => 
         }
       }
 
-      // ── Footers (all pages) ───────────────────────────────────────────────
+      // ── Footer on every page ────────────────────────────────────────────
       const pageCount = doc.getNumberOfPages()
       for (let i = 1; i <= pageCount; i++) {
         doc.setPage(i)
@@ -382,7 +392,7 @@ export const TestResults: React.FC<TestResultsProps> = ({ results, phases }) => 
     }
   }
 
-  // ─── UI ────────────────────────────────────────────────────────────────────
+  // ─── UI ─────────────────────────────────────────────────────────────────────
   const overviewMetrics = [
     { title: "Total Requests",    value: results.totalRequests.toLocaleString(), icon: TrendingUp,  color: "text-purple-600",  hoverBorder: "hover:border-purple-300" },
     { title: "Avg Response Time", value: `${results.avgResponseTime}ms`,          icon: Clock,        color: "text-blue-600",    hoverBorder: "hover:border-blue-300"   },
@@ -475,7 +485,7 @@ export const TestResults: React.FC<TestResultsProps> = ({ results, phases }) => 
                     <YAxis stroke="#6b7280" />
                     <Tooltip contentStyle={{ borderRadius: 8 }} />
                     <Legend />
-                    <Bar dataKey="requests" name="Requests" fill="#9333ea" radius={[4,4,0,0]} />
+                    <Bar dataKey="requests"    name="Requests"    fill="#9333ea" radius={[4,4,0,0]} />
                     <Bar dataKey="concurrency" name="Concurrency" fill="#c4b5fd" radius={[4,4,0,0]} />
                   </BarChart>
                 </ResponsiveContainer>
@@ -532,7 +542,7 @@ export const TestResults: React.FC<TestResultsProps> = ({ results, phases }) => 
                     <Tooltip contentStyle={{ borderRadius: 8 }} formatter={(v: any, name: string) => [name === "successRate" ? `${v}%` : v, name === "successRate" ? "Success Rate" : "Errors"]} />
                     <Legend />
                     <Bar dataKey="successRate" name="Success Rate" fill="#22c55e" radius={[4,4,0,0]} />
-                    <Bar dataKey="errors" name="Errors" fill="#ef4444" radius={[4,4,0,0]} />
+                    <Bar dataKey="errors"       name="Errors"       fill="#ef4444" radius={[4,4,0,0]} />
                   </BarChart>
                 </ResponsiveContainer>
               ) : (
@@ -622,12 +632,12 @@ export const TestResults: React.FC<TestResultsProps> = ({ results, phases }) => 
              results.urlBreakdown !== null &&
              Object.keys(results.urlBreakdown).length > 0 ? (
               Object.entries(results.urlBreakdown).map(([url, urlMetric]: [string, any]) => {
-                const isOpen = expandedUrls.has(url)
-                const rate = Number(urlMetric.successRate ?? 0)
-                const hasErrors = Array.isArray(urlMetric.errors) && urlMetric.errors.length > 0
-                const totalReqs = urlMetric.requests ?? 0
+                const isOpen      = expandedUrls.has(url)
+                const rate        = Number(urlMetric.successRate ?? 0)
+                const hasErrors   = Array.isArray(urlMetric.errors) && urlMetric.errors.length > 0
+                const totalReqs   = urlMetric.requests ?? 0
                 const successCount = Math.round((rate / 100) * totalReqs)
-                const errorCount = totalReqs - successCount
+                const errorCount  = totalReqs - successCount
 
                 const badgeClass =
                   rate >= 99 ? "bg-green-100 text-green-700 hover:bg-green-200" :
@@ -716,12 +726,12 @@ export const TestResults: React.FC<TestResultsProps> = ({ results, phases }) => 
         </CardContent>
       </Card>
 
-      {/* ── Hidden chart containers for PDF capture (off-screen) ───────────── */}
+      {/* ── Hidden chart containers for PDF capture (always rendered, off-screen) ─ */}
       <div style={{ position: 'fixed', left: '-9999px', top: 0, pointerEvents: 'none', zIndex: -1 }}>
 
-        {/* Response time percentile chart */}
-        <div ref={pdfResponseRef} style={{ background: 'white', padding: '12px 8px', width: '680px' }}>
-          <LineChart width={660} height={170} data={performanceData}>
+        {/* P50 / P95 / P99 response time line chart */}
+        <div ref={pdfResponseRef} style={{ background: 'white', padding: '8px', width: '680px' }}>
+          <LineChart width={660} height={175} data={performanceData}>
             <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
             <XAxis dataKey="phase" stroke="#6b7280" tick={{ fontSize: 11 }} />
             <YAxis stroke="#6b7280" unit="ms" tick={{ fontSize: 11 }} />
@@ -734,8 +744,8 @@ export const TestResults: React.FC<TestResultsProps> = ({ results, phases }) => 
         </div>
 
         {/* Requests per phase bar chart */}
-        <div ref={pdfRequestsRef} style={{ background: 'white', padding: '12px 8px', width: '380px' }}>
-          <BarChart width={360} height={165} data={phases.map(p => ({ phase: `Ph ${p.phase}`, requests: p.requests, concurrency: p.concurrency }))}>
+        <div ref={pdfRequestsRef} style={{ background: 'white', padding: '8px', width: '380px' }}>
+          <BarChart width={364} height={165} data={performanceData}>
             <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
             <XAxis dataKey="phase" stroke="#6b7280" tick={{ fontSize: 11 }} />
             <YAxis stroke="#6b7280" tick={{ fontSize: 11 }} />
@@ -746,15 +756,27 @@ export const TestResults: React.FC<TestResultsProps> = ({ results, phases }) => 
           </BarChart>
         </div>
 
-        {/* Success rate per phase bar chart */}
-        <div ref={pdfSuccessRef} style={{ background: 'white', padding: '12px 8px', width: '360px' }}>
-          <BarChart width={340} height={165} data={phases.map(p => ({ phase: `Ph ${p.phase}`, successRate: Number(p.successRate.toFixed(1)) }))}>
+        {/* Success rate per phase */}
+        <div ref={pdfSuccessRef} style={{ background: 'white', padding: '8px', width: '360px' }}>
+          <BarChart width={344} height={165} data={performanceData}>
             <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
             <XAxis dataKey="phase" stroke="#6b7280" tick={{ fontSize: 11 }} />
             <YAxis stroke="#6b7280" unit="%" domain={[0, 100]} tick={{ fontSize: 11 }} />
             <Tooltip formatter={(v: any) => [`${v}%`, 'Success Rate']} />
             <Legend />
             <Bar dataKey="successRate" name="Success Rate" fill="#1B3A6B" radius={[3,3,0,0]} />
+          </BarChart>
+        </div>
+
+        {/* Errors per phase */}
+        <div ref={pdfErrorsRef} style={{ background: 'white', padding: '8px', width: '380px' }}>
+          <BarChart width={364} height={165} data={performanceData}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+            <XAxis dataKey="phase" stroke="#6b7280" tick={{ fontSize: 11 }} />
+            <YAxis stroke="#6b7280" allowDecimals={false} tick={{ fontSize: 11 }} />
+            <Tooltip />
+            <Legend />
+            <Bar dataKey="errorCount" name="Errors" fill="#C8A232" radius={[3,3,0,0]} />
           </BarChart>
         </div>
 
