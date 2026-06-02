@@ -34,6 +34,9 @@ export const auth = betterAuth({
   plugins: [nextCookies()],
   secret: env.BETTER_AUTH_SECRET,
   baseURL: env.BETTER_AUTH_URL,
-
-  
+  trustedOrigins: [
+    env.BETTER_AUTH_URL,
+    env.NEXT_PUBLIC_APP_URL,
+    "https://loadforge-frontend-prod.azurewebsites.net",
+  ].filter(Boolean) as string[],
 })
