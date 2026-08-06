@@ -15,6 +15,20 @@
       "when": 1770869932303,
       "tag": "0001_normal_inhumans",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1778694073504,
+      "tag": "0002_cute_human_robot",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1778694507671,
+      "tag": "0003_short_gamora",
+      "breakpoints": true
     }
   ]
 }

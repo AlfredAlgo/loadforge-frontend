@@ -57,11 +57,6 @@ export function LiveTracking() {
           ? "Test Failed"
           : "Waiting for data..."
 
-    const STALE_THRESHOLD_MS = 2 * 60 * 60 * 1000 // 2 hours
-    const isStale =
-      test.status === "running" &&
-      Date.now() - test.startTime.getTime() > STALE_THRESHOLD_MS
-
     const metrics = test.currentPhase
       ? {
           totalRequests: test.currentPhase.requests,
@@ -69,7 +64,7 @@ export function LiveTracking() {
             test.currentPhase.requests > 0
               ? (test.currentPhase.success_count / test.currentPhase.requests) * 100
               : 0,
-          avgResponseTime: test.currentPhase.percentiles?.p50 ?? 0,
+          avgResponseTime: test.currentPhase.percentiles.p50,
           currentConcurrency: test.currentPhase.concurrency,
         }
       : {
@@ -95,12 +90,7 @@ export function LiveTracking() {
                 <span>Elapsed: {getElapsedTime(test.startTime.toISOString())}</span>
               </CardDescription>
             </div>
-            {isStale ? (
-              <Badge className="bg-orange-100 text-orange-700 hover:bg-orange-100">
-                <AlertCircle className="mr-1 h-3 w-3" />
-                Timed Out
-              </Badge>
-            ) : getStatusBadge(test.status)}
+            {getStatusBadge(test.status)}
           </div>
         </CardHeader>
         <CardContent className="space-y-6">
@@ -145,9 +135,7 @@ export function LiveTracking() {
                   Avg Response
                 </div>
                 <div className="mt-2 text-2xl font-bold text-gray-900">
-                  {metrics.avgResponseTime && !isNaN(metrics.avgResponseTime)
-                    ? `${Math.round(metrics.avgResponseTime)}ms`
-                    : "—"}
+                  {Math.round(metrics.avgResponseTime)}ms
                 </div>
               </div>
 
@@ -236,7 +224,7 @@ export function LiveTracking() {
                 </div>
               )}
               {tests
-                .filter((t) => t.status === "running" && Date.now() - t.startTime.getTime() <= 2 * 60 * 60 * 1000)
+                .filter((t) => t.status === "running")
                 .map((test) => renderTestCard(test))}
 
               {tests.filter((t) => t.status !== "running").length > 0 && (

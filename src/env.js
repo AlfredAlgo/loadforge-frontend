@@ -32,6 +32,6 @@ export const env = createEnv({
     NEXT_PUBLIC_BETTER_AUTH_CALLBACK: process.env.NEXT_PUBLIC_BETTER_AUTH_CALLBACK,
   },
 
-  skipValidation: !!process.env.SKIP_ENV_VALIDATION || true,
+  skipValidation: !!process.env.SKIP_ENV_VALIDATION,
   emptyStringAsUndefined: true,
 });

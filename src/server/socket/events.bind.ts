@@ -18,6 +18,15 @@ export const eventBind = () => {
   socket.on("test_completed", (data) => {
     publish({ type: "test_completed", data });
   });
+  socket.on("scenario_started", (data) => {
+    publish({ type: "scenario_started", data });
+  });
+  socket.on("scenario_progress", (data) => {
+    publish({ type: "scenario_progress", data });
+  });
+  socket.on("scenario_completed", (data) => {
+    publish({ type: "scenario_completed", data });
+  });
   socket.on("error", (err) => {
     publish({ type: "error", data: err });
   });
