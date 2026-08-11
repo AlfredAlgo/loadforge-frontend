@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { Activity, Settings, Zap, BarChart3, Radio } from "lucide-react"
+import { Activity, Settings, Zap, BarChart3, Radio, FileCode2 } from "lucide-react"
 import { Skeleton } from "~/components/ui/skeleton"
 import { Button } from "~/components/ui/button"
 import { authClient } from "~/lib/auth.client"
@@ -16,7 +16,9 @@ export function DashboardNav() {
   const links = [
     { href: "/", label: "Dashboard", icon: Activity },
     { href: "/test", label: "New Test", icon: Zap },
+    { href: "/test/scenario", label: "New Scenario", icon: FileCode2 },
     { href: "/live", label: "Live Tests", icon: Radio },
+    { href: "/live/scenario", label: "Live Scenarios", icon: Radio },
     // { href: "/results", label: "Results", icon: BarChart3 },
     // { href: "/settings", label: "Settings", icon: Settings },
   ]
