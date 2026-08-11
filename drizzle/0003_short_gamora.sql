@@ -1,1 +1,0 @@
-ALTER TABLE "loadforge_load_test" ADD COLUMN "scenario_metrics" jsonb;

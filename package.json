@@ -65,6 +65,7 @@
     "drizzle-orm": "0.45.1",
     "embla-carousel-react": "8.5.1",
     "geist": "1.5.1",
+    "html2canvas": "^1.4.1",
     "input-otp": "1.4.1",
     "jspdf": "^4.2.1",
     "jspdf-autotable": "^5.0.7",

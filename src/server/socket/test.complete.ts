@@ -114,6 +114,15 @@ export const onTestComplete = () => {
       const perUrlMetrics = testData.per_url_metrics || {};
       const accumulatedErrors = getAccumulatedErrors(testData.test_id);
 
+      // Log the raw structure of the first URL metric so we can see exactly what the backend sends
+      const firstEntry = Object.entries(perUrlMetrics)[0];
+      if (firstEntry) {
+        console.log(`🔬 [RAW STRUCTURE] Keys in per_url_metrics[url]:`, Object.keys(firstEntry[1] as any));
+        console.log(`🔬 [RAW STRUCTURE] Full first entry:`, JSON.stringify(firstEntry[1]));
+      }
+      // Also log the top-level keys of the entire testData event
+      console.log(`🔬 [RAW EVENT] test_completed top-level keys:`, Object.keys(testData));
+
       for (const [url, metrics] of Object.entries(perUrlMetrics)) {
         const urlMetric = metrics as any;
 
@@ -126,7 +135,7 @@ export const onTestComplete = () => {
         urlBreakdown[url] = {
           url: url,
           requests: urlMetric.total_requests || 0,
-          avgResponseTime: Math.round((urlMetric.average_time || 0) * 1000), // Convert to ms
+          avgResponseTime: Math.round((urlMetric.average_time || 0) * 1000),
           successRate: Number((urlMetric.success_rate || 0).toFixed(1)),
           errors: rawErrors.map((e: any) => ({
             statusCode: e.status_code,
