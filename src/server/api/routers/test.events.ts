@@ -18,7 +18,15 @@ export const testsRouter = createTRPCRouter({
         created_at: completeTests.created_at,
       })
       .from(completeTests)
-      .where (and(eq(completeTests.status, "running"), eq(completeTests.user_id, userId)))
+      .where(
+        and(
+          eq(completeTests.status, "running"),
+          eq(completeTests.user_id, userId),
+          // URL/CSV ramp tests only. Scenario rows have their own page
+          // and their own /live/scenario bootstrap query.
+          eq(completeTests.type, "url"),
+        ),
+      )
       .limit(50);
 
     return tests.map((t) => ({
@@ -118,6 +126,115 @@ export const testsRouter = createTRPCRouter({
       }
 
       return { status: "Test started" };
+    }),
+  startScenario: protectedProcedure
+    .input(
+      z.object({
+        name: z.string().min(1),
+        file_id: z.string().min(1),
+        jmx_filename: z.string().optional(),
+        mode: z.enum(["functional", "load"]),
+        users: z.number().int().positive().optional(),
+        rampup: z.number().int().nonnegative().optional(),
+        duration: z.number().int().positive().optional(),
+      }),
+    )
+    .mutation(async ({ input, ctx }) => {
+      const socket = getSocket();
+      const userId = ctx.user.id;
+
+      if (!socket.connected) {
+        throw new Error(
+          "Socket not connected. Please ensure the backend is running.",
+        );
+      }
+
+      const id = uuidv4();
+      const users = input.mode === "functional" ? 1 : input.users ?? 5;
+      const rampup = input.mode === "functional" ? 1 : input.rampup ?? 5;
+      const duration = input.mode === "functional" ? 0 : input.duration ?? 60;
+
+      try {
+        await ctx.db.insert(completeTests).values({
+          id,
+          user_id: userId,
+          name: input.name,
+          type: "scenario",
+          mode: input.mode,
+          users,
+          ramp_up_time: rampup,
+          duration,
+          file_id: input.file_id,
+          jmx_filename: input.jmx_filename ?? null,
+          status: "running",
+        });
+
+        socket.emit("start_scenario", {
+          file_id: input.file_id,
+          mode: input.mode,
+          users,
+          rampup,
+          duration,
+          test_id: id,
+          user_id: userId,
+        });
+
+        return { status: "Scenario started", test_id: id };
+      } catch (error) {
+        console.log("Failed to start scenario:", error);
+        throw new Error(
+          "Failed to start scenario. Please check db connection or socket connection",
+        );
+      }
+    }),
+  getRunningScenarios: protectedProcedure.query(async ({ ctx }) => {
+    const rows = await ctx.db
+      .select({
+        id: completeTests.id,
+        name: completeTests.name,
+        status: completeTests.status,
+        mode: completeTests.mode,
+        created_at: completeTests.created_at,
+      })
+      .from(completeTests)
+      .where(
+        and(
+          eq(completeTests.type, "scenario"),
+          eq(completeTests.status, "running"),
+          eq(completeTests.user_id, ctx.user.id),
+        ),
+      )
+      .limit(50);
+    return rows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      status: r.status,
+      mode: r.mode,
+      createdAt: r.created_at?.toISOString?.() ?? null,
+    }));
+  }),
+  getScenarioMetrics: protectedProcedure
+    .input(z.object({ testId: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const row = await ctx.db
+        .select({
+          id: completeTests.id,
+          name: completeTests.name,
+          status: completeTests.status,
+          mode: completeTests.mode,
+          scenario_metrics: completeTests.scenario_metrics,
+          created_at: completeTests.created_at,
+          completed_at: completeTests.completed_at,
+        })
+        .from(completeTests)
+        .where(
+          and(
+            eq(completeTests.id, input.testId),
+            eq(completeTests.user_id, ctx.user.id),
+          ),
+        )
+        .limit(1);
+      return row[0] ?? null;
     }),
   onProgress: publicProcedure.subscription(async function* (opts) {
     console.log("🔌 [TRPC] Client subscribed to events");

@@ -123,11 +123,19 @@ export const completeTests = createTable("load_test", {
     .references(() => users.id)
     .notNull(),
   name: varchar("name", { length: 256 }).notNull(),
-  urls: jsonb("urls").notNull(), // Array of URL strings
-  concurrency_pattern: jsonb("concurrency_pattern").notNull(), // Array of concurrency values
-  duration: integer("duration").notNull(), // in seconds
-  ramp_up_time: integer("ramp_up_time").notNull(), // in seconds
-  ramp_down_time: integer("ramp_down_time").notNull(), // in seconds
+  // 'url' = legacy CSV URL ramp test, 'scenario' = uploaded .jmx
+  type: varchar("type", { length: 32 }).default("url").notNull(),
+  urls: jsonb("urls"), // Array of URL strings. Nullable: scenarios don't use it.
+  concurrency_pattern: jsonb("concurrency_pattern"), // Nullable for scenarios.
+  duration: integer("duration"), // in seconds. Nullable: not all flows use it.
+  ramp_up_time: integer("ramp_up_time"), // in seconds. Nullable for functional scenarios.
+  ramp_down_time: integer("ramp_down_time"), // in seconds. Nullable for scenarios.
+  // Scenario-only columns.
+  mode: varchar("mode", { length: 32 }), // 'functional' | 'load'
+  users: integer("users"), // virtual-user count for load scenarios
+  jmx_filename: varchar("jmx_filename", { length: 512 }),
+  file_id: varchar("file_id", { length: 64 }), // matches backend's UUID file_id
+  scenario_metrics: jsonb("scenario_metrics"), // full final-metrics blob from backend on scenario_completed
   status: varchar("status", { length: 50 }).default("pending").notNull(), // pending, running, completed, failed
   created_at: timestamp("created_at")
     .default(sql`CURRENT_TIMESTAMP`)
@@ -166,3 +174,6 @@ export const settings = createTable("setting", {
     .default(sql`CURRENT_TIMESTAMP`)
     .notNull(),
 });
+
+
+

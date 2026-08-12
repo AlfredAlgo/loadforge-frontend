@@ -23,6 +23,7 @@ export const onPhaseComplete = () => {
     }
 
     try {
+
       // Accumulate per-URL error data from every phase event so test.complete
       // can merge it into the final url_breakdown even if test_completed omits errors.
       if (phaseData.per_url_metrics) {
@@ -60,9 +61,11 @@ export const onPhaseComplete = () => {
         concurrency: phaseData.concurrency,
         success_count: phaseData.success_count,
         error_count: phaseData.error_count,
-        percentile: phaseData.percentiles ?? {},
+        percentile: phaseData.percentiles,
         requests: phaseData.requests,
-      }).onConflictDoNothing();
+      }).onConflictDoNothing({
+        target: [testPhases.test_id, testPhases.phase_number],
+      });
 
       processedPhases.add(phaseKey);
 

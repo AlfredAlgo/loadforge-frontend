@@ -4,15 +4,25 @@ import { ZodError } from "zod";
 import { eventBind } from "../socket/events.bind";
 import { onPhaseComplete } from "../socket/phase.complete";
 import { onTestComplete } from "../socket/test.complete";
+import { onScenarioComplete, onScenarioFailed } from "../socket/scenario.complete";
 import { db } from "../db/index";
 import { CreateWSSContextFnOptions } from "@trpc/server/adapters/ws";
 import { type CreateNextContextOptions } from "@trpc/server/adapters/next";
 import type { IncomingHttpHeaders } from "http";
 import { auth } from "~/lib/auth";
 
-eventBind();
-onPhaseComplete();
-onTestComplete();
+// Guard against Next.js dev-mode HMR re-running this module — each re-run
+// would add another set of socket listeners and eventbus subscribers, so a
+// single backend emit would be handled N times (duplicate DB writes etc.).
+const globalForBindings = globalThis as unknown as { _bindingsRegistered?: boolean };
+if (!globalForBindings._bindingsRegistered) {
+  globalForBindings._bindingsRegistered = true;
+  eventBind();
+  onPhaseComplete();
+  onTestComplete();
+  onScenarioComplete();
+  onScenarioFailed();
+}
 function toHeaders(headers: IncomingHttpHeaders): Headers {
   const result = new Headers();
   for (const [key, value] of Object.entries(headers)) {
