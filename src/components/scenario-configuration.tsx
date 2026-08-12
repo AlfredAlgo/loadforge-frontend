@@ -35,7 +35,7 @@ export function ScenarioConfiguration() {
   const start = api.test.startScenario.useMutation({
     onSuccess() {
       setError(null);
-      router.push("/live");
+      router.push("/live/scenario");
     },
     onError(err) {
       setError(err.message || "Failed to start scenario");

@@ -49,7 +49,7 @@ export function ScenarioLiveTracking() {
       {items.length === 0 && (
         <div className="rounded-md border border-dashed border-gray-300 p-8 text-center text-sm text-gray-500">
           No live scenarios yet. Start one from the{" "}
-          <Link href="/test" className="text-blue-600 underline">
+          <Link href="/test/scenario" className="text-blue-600 underline">
             scenario page
           </Link>
           .
