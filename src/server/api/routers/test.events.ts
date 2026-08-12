@@ -1,5 +1,5 @@
 import { subscribe } from "../../socket/eventbus";
-import { tracked } from "@trpc/server";
+import { tracked, TRPCError } from "@trpc/server";
 import { getSocket } from "../../socket/engine.socket";
 import { createTRPCRouter, publicProcedure, protectedProcedure } from "../trpc";
 import { z } from "zod";
@@ -119,13 +119,13 @@ export const testsRouter = createTRPCRouter({
           test_id: id,
         };
       } catch (error) {
-        console.log("Failed to start test");
-        throw new Error(
-          "Failed to start test. Please check db connection or socket connection"
-        );
+        console.error("[startTest] Failed to start test:", error);
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Failed to start test. Please check db connection or socket connection",
+          cause: error,
+        });
       }
-
-      return { status: "Test started" };
     }),
   startScenario: protectedProcedure
     .input(
@@ -181,10 +181,12 @@ export const testsRouter = createTRPCRouter({
 
         return { status: "Scenario started", test_id: id };
       } catch (error) {
-        console.log("Failed to start scenario:", error);
-        throw new Error(
-          "Failed to start scenario. Please check db connection or socket connection",
-        );
+        console.error("[startScenario] Failed to start scenario:", error);
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Failed to start scenario. Please check db connection or socket connection",
+          cause: error,
+        });
       }
     }),
   getRunningScenarios: protectedProcedure.query(async ({ ctx }) => {
