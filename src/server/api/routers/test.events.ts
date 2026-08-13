@@ -1,6 +1,6 @@
 import { subscribe } from "../../socket/eventbus";
 import { tracked, TRPCError } from "@trpc/server";
-import { getSocket } from "../../socket/engine.socket";
+import { getSocket, ensureSocketConnected } from "../../socket/engine.socket";
 import { createTRPCRouter, publicProcedure, protectedProcedure } from "../trpc";
 import { z } from "zod";
 import { completeTests, testPhases, testResults } from "../../db/schema";
@@ -80,11 +80,7 @@ export const testsRouter = createTRPCRouter({
       const socket = getSocket();
       const userId = ctx.user.id;
 
-      if (!socket.connected) {
-        throw new Error(
-          "Socket not connected. Please ensure the backend is running."
-        );
-      }
+      await ensureSocketConnected(socket);
       console.log(
         "🔌 [MUTATION] Socket ID:",
         socket.id,
@@ -143,11 +139,7 @@ export const testsRouter = createTRPCRouter({
       const socket = getSocket();
       const userId = ctx.user.id;
 
-      if (!socket.connected) {
-        throw new Error(
-          "Socket not connected. Please ensure the backend is running.",
-        );
-      }
+      await ensureSocketConnected(socket);
 
       const id = uuidv4();
       const users = input.mode === "functional" ? 1 : input.users ?? 5;

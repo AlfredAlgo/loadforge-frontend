@@ -20,7 +20,13 @@ export function getSocket(): Socket {
     autoConnect: true,
     reconnection: true,
     reconnectionDelay: 500,
-    reconnectionAttempts: 5,
+    reconnectionDelayMax: 5000,
+    // The backend can cold-start (Azure "Always On" off, redeploys, etc.),
+    // which easily takes longer than a handful of quick retries to come
+    // back up. Keep retrying with backoff instead of giving up for good
+    // after ~2.5s and leaving this cached socket permanently disconnected
+    // until the whole Next.js process restarts.
+    reconnectionAttempts: Infinity,
   });
 
   if (!globalForSocket._appSocketBound) {
@@ -50,4 +56,32 @@ export function getSocket(): Socket {
 export function isSocketReady(): boolean {
   const s = globalForSocket._appSocket;
   return !!s && s.connected;
+}
+
+// Mutations that need the socket call this instead of reading `.connected`
+// directly. If the backend cold-started and dropped the old connection,
+// this actively (re)connects and waits, rather than failing immediately
+// just because the socket happened to be mid-reconnect at that instant.
+export function ensureSocketConnected(
+  socket: Socket,
+  timeoutMs = 15000,
+): Promise<void> {
+  if (socket.connected) return Promise.resolve();
+
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      socket.off("connect", onConnect);
+      reject(new Error("Socket not connected. Please ensure the backend is running."));
+    }, timeoutMs);
+
+    function onConnect() {
+      clearTimeout(timer);
+      resolve();
+    }
+
+    socket.once("connect", onConnect);
+    if (!socket.active) {
+      socket.connect();
+    }
+  });
 }
