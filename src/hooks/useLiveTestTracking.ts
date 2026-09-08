@@ -1,6 +1,7 @@
 // loadforge/src/hooks/useLiveTestTracking.ts
 import { useState, useEffect } from "react";
 import { api } from "~/trpc/react";
+import { classifyBackendError, formatTRPCError } from "~/lib/format-error";
 
 export interface TestProgress {
   phase: number;
@@ -189,7 +190,7 @@ export function useLiveTestTracking() {
         }
       } else if (data.type === "error") {
         const testId = data.data.test_id;
-        const errorMessage = data.data.error || "An unknown error occurred";
+        const errorMessage = classifyBackendError(data.data.error);
         if (testId) {
           setTests((prev) => {
             const newMap = new Map(prev);
@@ -211,7 +212,7 @@ export function useLiveTestTracking() {
     onError(err) {
       console.error("❌ [CLIENT] Subscription error:", err);
       setIsConnected(false);
-      setError(err.message || "An unknown error occurred");
+      setError(formatTRPCError(err));
     },
   });
 

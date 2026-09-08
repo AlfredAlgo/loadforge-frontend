@@ -17,6 +17,7 @@ import { Input } from "~/components/ui/input";
 import { Label } from "~/components/ui/label";
 import { Plus, X, Upload, Download, Play, Loader2 } from "lucide-react";
 import { api } from "~/trpc/react";
+import { formatTRPCError } from "~/lib/format-error";
 
 
 export function TestConfiguration() {
@@ -42,7 +43,7 @@ export function TestConfiguration() {
     onError(err) {
       console.error("❌ [CLIENT] Subscription error:", err);
       setIsConnected(false);
-      setError(err.message || "An unknown error occurred");
+      setError(formatTRPCError(err));
     },
   });
 
@@ -52,7 +53,7 @@ export function TestConfiguration() {
       router.push("/live"); // Navigate to live tracking page on test start
     },
     onError(err) {
-      setError(err.message || "An unknown error occurred");
+      setError(formatTRPCError(err));
     },
   });
 

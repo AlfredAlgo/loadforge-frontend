@@ -15,6 +15,7 @@ import { Input } from "~/components/ui/input";
 import { Label } from "~/components/ui/label";
 import { Upload, Play, Loader2 } from "lucide-react";
 import { api } from "~/trpc/react";
+import { formatTRPCError } from "~/lib/format-error";
 
 type Mode = "functional" | "load";
 
@@ -38,7 +39,7 @@ export function ScenarioConfiguration() {
       router.push("/live/scenario");
     },
     onError(err) {
-      setError(err.message || "Failed to start scenario");
+      setError(formatTRPCError(err));
     },
   });
 

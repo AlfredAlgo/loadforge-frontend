@@ -1,6 +1,7 @@
 // loadforge/src/hooks/useLiveScenarioTracking.ts
 import { useEffect, useState } from "react";
 import { api } from "~/trpc/react";
+import { classifyBackendError, formatTRPCError } from "~/lib/format-error";
 
 export interface ScenarioProgress {
   samples: number;
@@ -170,7 +171,7 @@ export function useLiveScenarioTracking() {
         });
       } else if (event.type === "error") {
         const runId = event.data?.run_id;
-        const message = event.data?.error || event.data?.reason || "Unknown error";
+        const message = classifyBackendError(event.data?.error || event.data?.reason);
         if (runId) {
           setScenarios((prev) => {
             const next = new Map(prev);
@@ -191,7 +192,7 @@ export function useLiveScenarioTracking() {
     },
     onError(err) {
       setIsConnected(false);
-      setError(err.message || "Subscription error");
+      setError(formatTRPCError(err));
     },
   });
 

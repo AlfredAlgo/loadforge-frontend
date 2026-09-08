@@ -50,6 +50,7 @@ export default function ScenarioResultsPage() {
       <DashboardNav />
       {metrics ? (
         <ScenarioResultsView
+          testId={data.id ?? testId}
           name={data.name ?? ""}
           status={data.status ?? "unknown"}
           mode={data.mode ?? null}
