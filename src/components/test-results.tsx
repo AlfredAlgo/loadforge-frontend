@@ -10,6 +10,10 @@ import {
 } from "recharts"
 import { CheckCircle2, Clock, TrendingUp, AlertCircle, ChevronDown, FileDown } from "lucide-react"
 import { gautengLogoB64 } from "~/lib/gauteng-logo-b64"
+import {
+  REPORT_COLORS, addChart, captureChart, drawFooter, narrativeBox,
+  pageBand, sectionHeading, verdictCellStyler, verdictFor,
+} from "~/lib/pdf-report"
 
 interface TestResultsProps {
   results: {
@@ -52,46 +56,63 @@ interface TestResultsProps {
   }>;
 }
 
-// ── SVG → PNG helper (works reliably with Recharts' SVG output) ─────────────
-function svgToPng(svgEl: SVGSVGElement): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const w = svgEl.clientWidth || Number(svgEl.getAttribute('width') ?? 600)
-    const h = svgEl.clientHeight || Number(svgEl.getAttribute('height') ?? 200)
+/** Auto-generated "what went right / what went wrong" narrative for the PDF,
+ *  derived from the same metrics already on screen — no new data required. */
+function buildLoadNarrative(
+  results: TestResultsProps["results"],
+  phases: TestResultsProps["phases"],
+): { right: string[]; wrong: string[] } {
+  const right: string[] = []
+  const wrong: string[] = []
+  const successRate = results.totalRequests
+    ? (results.successfulRequests / results.totalRequests) * 100
+    : 0
 
-    let svgStr = new XMLSerializer().serializeToString(svgEl)
-    if (!svgStr.includes('xmlns='))
-      svgStr = svgStr.replace('<svg', '<svg xmlns="http://www.w3.org/2000/svg"')
+  if (results.totalRequests > 0) {
+    right.push(
+      `${results.successfulRequests.toLocaleString()} of ${results.totalRequests.toLocaleString()} requests (${successRate.toFixed(1)}%) completed successfully at an average of ${results.avgResponseTime}ms.`,
+    )
+  }
 
-    const blob = new Blob([svgStr], { type: 'image/svg+xml;charset=utf-8' })
-    const url  = URL.createObjectURL(blob)
-    const img  = new Image()
-
-    img.onload = () => {
-      const canvas = document.createElement('canvas')
-      canvas.width  = w * 2
-      canvas.height = h * 2
-      const ctx = canvas.getContext('2d')!
-      ctx.scale(2, 2)
-      ctx.fillStyle = '#ffffff'
-      ctx.fillRect(0, 0, w, h)
-      ctx.drawImage(img, 0, 0, w, h)
-      URL.revokeObjectURL(url)
-      resolve(canvas.toDataURL('image/png'))
+  if (phases.length > 0) {
+    const best = [...phases].sort((a, b) => b.successRate - a.successRate)[0]!
+    const worst = [...phases].sort((a, b) => a.successRate - b.successRate)[0]!
+    if (best.successRate >= 99) {
+      right.push(`Phase ${best.phase} held up best — ${best.concurrency} concurrent users at a ${best.successRate.toFixed(1)}% success rate, P95 of ${best.percentiles.p95}ms.`)
     }
-    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('svg load failed')) }
-    img.src = url
-  })
-}
+    if (worst.successRate < 99) {
+      wrong.push(`Phase ${worst.phase} was the weakest — ${worst.errorCount} failed request(s) out of ${worst.requests.toLocaleString()} at ${worst.concurrency} concurrent users (${worst.successRate.toFixed(1)}% success).`)
+    } else {
+      right.push(`Every phase stayed at or above a 99% success rate as concurrency scaled up to ${Math.max(...phases.map(p => p.concurrency))} users.`)
+    }
+  }
 
-async function captureChart(ref: React.RefObject<HTMLDivElement | null>): Promise<string | null> {
-  if (!ref.current) return null
-  // Small wait to let Recharts finish its internal RAF-based render
-  await new Promise(r => setTimeout(r, 150))
-  try {
-    const svgEl = ref.current.querySelector('svg')
-    if (!svgEl) return null
-    return await svgToPng(svgEl as SVGSVGElement)
-  } catch { return null }
+  if (results.p50ResponseTime > 0 && results.p99ResponseTime > results.p50ResponseTime * 3) {
+    wrong.push(`Tail latency is elevated — P99 (${results.p99ResponseTime}ms) is ${(results.p99ResponseTime / results.p50ResponseTime).toFixed(1)}× the median (${results.p50ResponseTime}ms), suggesting inconsistent response times under load.`)
+  } else if (results.p50ResponseTime > 0) {
+    right.push(`Response times were consistent under load — P99 (${results.p99ResponseTime}ms) stayed within ${(results.p99ResponseTime / results.p50ResponseTime).toFixed(1)}× of the median.`)
+  }
+
+  const urlEntries = Object.entries(results.urlBreakdown ?? {})
+  const failingUrls = urlEntries.filter(([, m]: any) => Number(m.successRate ?? 100) < 100)
+  if (failingUrls.length > 0) {
+    const [topUrl, topMetric] = [...failingUrls].sort(
+      (a: any, b: any) => (b[1].errors?.reduce((s: number, e: any) => s + e.count, 0) ?? 0) - (a[1].errors?.reduce((s: number, e: any) => s + e.count, 0) ?? 0),
+    )[0] as [string, any]
+    const topErrCount = topMetric.errors?.reduce((s: number, e: any) => s + e.count, 0) ?? 0
+    const topStatus = [...(topMetric.errors ?? [])].sort((a: any, b: any) => b.count - a.count)[0]
+    wrong.push(
+      `${topUrl} accounted for the most failures${results.failedRequests ? ` (${topErrCount} of ${results.failedRequests}, ${((topErrCount / results.failedRequests) * 100).toFixed(0)}%)` : ""}` +
+      (topStatus ? `, most commonly HTTP ${topStatus.statusCode}.` : "."),
+    )
+  } else if (urlEntries.length > 0) {
+    right.push(`All ${urlEntries.length} tested endpoint(s) returned a 100% success rate.`)
+  }
+
+  if (right.length === 0) right.push("No requests were recorded for this run.")
+  if (wrong.length === 0) wrong.push("No issues were identified — every phase and endpoint stayed above the 99% success threshold.")
+
+  return { right, wrong }
 }
 
 export const TestResults: React.FC<TestResultsProps> = ({ results, phases }) => {
@@ -139,13 +160,7 @@ export const TestResults: React.FC<TestResultsProps> = ({ results, phases }) => 
 
       const doc    = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
       const pageW  = 210
-
-      // Gauteng Provincial Government palette
-      const navy:    [number,number,number] = [27,  58, 107]
-      const gold:    [number,number,number] = [200,162,  50]
-      const charcoal:[number,number,number] = [44,  44,  44]
-      const rowAlt:  [number,number,number] = [245,247, 250]
-      const white:   [number,number,number] = [255,255, 255]
+      const { navy, gold, charcoal, rowAlt, white } = REPORT_COLORS
 
       // ── Capture all charts in parallel ──────────────────────────────────
       const [responseTimeImg, requestsImg, successImg, errorsImg] = await Promise.all([
@@ -155,48 +170,7 @@ export const TestResults: React.FC<TestResultsProps> = ({ results, phases }) => 
         captureChart(pdfErrorsRef),
       ])
 
-      // ── Helpers ──────────────────────────────────────────────────────────
-      const sectionHeading = (text: string, y: number) => {
-        doc.setTextColor(...navy)
-        doc.setFontSize(10)
-        doc.setFont('helvetica', 'bold')
-        doc.text(text, 14, y)
-        doc.setDrawColor(...gold)
-        doc.setLineWidth(0.6)
-        doc.line(14, y + 1.5, pageW - 14, y + 1.5)
-        doc.setTextColor(...charcoal)
-      }
-
-      const pageBand = (title: string) => {
-        doc.setFillColor(...navy)
-        doc.rect(0, 0, pageW, 12, 'F')
-        doc.setFillColor(...gold)
-        doc.rect(0, 12, pageW, 1, 'F')
-        doc.setTextColor(...white)
-        doc.setFontSize(8.5)
-        doc.setFont('helvetica', 'bold')
-        doc.text(title, 14, 8.5)
-        doc.setTextColor(...charcoal)
-      }
-
-      const addChart = (img: string | null, x: number, y: number, w: number, h: number, title: string) => {
-        doc.setTextColor(...navy)
-        doc.setFontSize(9)
-        doc.setFont('helvetica', 'bold')
-        doc.text(title, x, y)
-        doc.setDrawColor(...gold)
-        doc.setLineWidth(0.5)
-        doc.line(x, y + 1.5, x + w, y + 1.5)
-        if (img) {
-          doc.addImage(img, 'PNG', x, y + 4, w, h)
-        } else {
-          doc.setFontSize(7.5)
-          doc.setFont('helvetica', 'italic')
-          doc.setTextColor(160, 160, 160)
-          doc.text('Chart unavailable', x + w / 2, y + h / 2 + 4, { align: 'center' })
-        }
-        doc.setTextColor(...charcoal)
-      }
+      const narrative = buildLoadNarrative(results, phases)
 
       // ══════════════════════════════════════════════════════════════════════
       // PAGE 1 — COVER + SUMMARY TABLES
@@ -235,7 +209,7 @@ export const TestResults: React.FC<TestResultsProps> = ({ results, phases }) => 
       )
 
       // Overview + Percentiles tables (side by side)
-      sectionHeading('Test Overview', 53)
+      sectionHeading(doc, 'Test Overview', 53)
 
       autoTable(doc, {
         startY: 57,
@@ -273,43 +247,51 @@ export const TestResults: React.FC<TestResultsProps> = ({ results, phases }) => 
         tableWidth: 84,
       })
 
+      // What went right / what went wrong — derived from the same metrics above
+      const afterRight = narrativeBox(doc, 'What went right', narrative.right, (doc as any).lastAutoTable.finalY + 8, REPORT_COLORS.green)
+      const afterWrong = narrativeBox(doc, 'What went wrong', narrative.wrong, afterRight, REPORT_COLORS.red)
+
       // Response time chart (full width, bottom of page 1)
-      const afterTables = (doc as any).lastAutoTable.finalY + 10
-      addChart(responseTimeImg, 14, afterTables, 182, 65, 'Response Time by Phase — P50 / P95 / P99 (ms)')
+      addChart(doc, responseTimeImg, 14, afterWrong, 182, 55, 'Response Time by Phase — P50 / P95 / P99 (ms)')
 
       // ══════════════════════════════════════════════════════════════════════
       // PAGE 2 — PHASE BREAKDOWN + CHARTS
       // ══════════════════════════════════════════════════════════════════════
 
       doc.addPage()
-      pageBand('Phase Breakdown')
+      pageBand(doc, 'Phase Breakdown')
 
       if (phases.length > 0) {
         autoTable(doc, {
           startY: 17,
-          head: [['Phase', 'Concurrency', 'Requests', 'Success', 'Errors', 'Success Rate', 'P50', 'P95', 'P99']],
+          head: [['Phase', 'Concurrency', 'Requests', 'Success', 'Errors', 'Success Rate', 'P50', 'P95', 'P99', 'Status']],
           body: phases.map(p => [
             `Phase ${p.phase}`, p.concurrency, p.requests, p.successCount, p.errorCount,
             `${p.successRate.toFixed(1)}%`,
             `${p.percentiles.p50} ms`, `${p.percentiles.p95} ms`, `${p.percentiles.p99} ms`,
+            verdictFor(p.successRate, p.requests).label,
           ]),
           headStyles: { fillColor: navy, textColor: white, fontStyle: 'bold', fontSize: 7.5 },
           bodyStyles: { fontSize: 7.5, textColor: charcoal },
           alternateRowStyles: { fillColor: rowAlt },
           margin: { left: 14, right: 14 },
+          didParseCell: verdictCellStyler((rowIndex) => {
+            const p = phases[rowIndex]
+            return p ? { rate: p.successRate, samples: p.requests } : null
+          }),
         })
       }
 
       const chartTop = phases.length > 0 ? (doc as any).lastAutoTable.finalY + 10 : 20
 
       // Row 1: Requests (left) + Success Rate (right)
-      addChart(requestsImg,   14,  chartTop,      90, 55, 'Total Requests per Phase')
-      addChart(successImg,   112,  chartTop,      84, 55, 'Success Rate per Phase (%)')
+      addChart(doc, requestsImg,   14,  chartTop,      90, 55, 'Total Requests per Phase')
+      addChart(doc, successImg,   112,  chartTop,      84, 55, 'Success Rate per Phase (%)')
 
       // Row 2: Errors (left, half width) — only if there were errors
       const row2Top = chartTop + 65
       if (results.failedRequests > 0) {
-        addChart(errorsImg, 14, row2Top, 90, 55, 'Errors per Phase')
+        addChart(doc, errorsImg, 14, row2Top, 90, 55, 'Errors per Phase')
       }
 
       // ══════════════════════════════════════════════════════════════════════
@@ -319,35 +301,42 @@ export const TestResults: React.FC<TestResultsProps> = ({ results, phases }) => 
       const urlEntries = Object.entries(results.urlBreakdown ?? {})
       if (urlEntries.length > 0) {
         doc.addPage()
-        pageBand('Performance by URL')
+        pageBand(doc, 'Performance by URL')
 
         autoTable(doc, {
           startY: 17,
-          head: [['URL', 'Requests', 'Avg Response Time', 'Success Rate']],
+          head: [['URL', 'Requests', 'Avg Response Time', 'Success Rate', 'Status']],
           body: urlEntries.map(([url, m]: any) => [
             url.length > 62 ? url.slice(0, 59) + '…' : url,
             m.requests ?? 0,
             `${m.avgResponseTime ?? 0} ms`,
             `${Number(m.successRate ?? 0).toFixed(1)}%`,
+            verdictFor(Number(m.successRate ?? 0), Number(m.requests ?? 0)).label,
           ]),
           headStyles: { fillColor: navy, textColor: white, fontStyle: 'bold', fontSize: 8 },
           bodyStyles: { fontSize: 7.5, textColor: charcoal },
           alternateRowStyles: { fillColor: rowAlt },
-          columnStyles: { 0: { cellWidth: 105 } },
+          columnStyles: { 0: { cellWidth: 90 } },
           margin: { left: 14, right: 14 },
+          didParseCell: verdictCellStyler((rowIndex) => {
+            const entry = urlEntries[rowIndex]
+            if (!entry) return null
+            const m = entry[1] as any
+            return { rate: Number(m.successRate ?? 0), samples: Number(m.requests ?? 0) }
+          }),
         })
 
         // Error details
         const urlsWithErrors = urlEntries.filter(([, m]: any) => Array.isArray(m.errors) && m.errors.length > 0)
         if (urlsWithErrors.length > 0) {
           let y = (doc as any).lastAutoTable.finalY + 12
-          sectionHeading('Error Details by URL', y)
+          sectionHeading(doc, 'Error Details by URL', y)
           y += 8
 
           for (const [url, m] of urlsWithErrors as any) {
             if (y > 265) {
               doc.addPage()
-              pageBand('Error Details by URL — continued')
+              pageBand(doc, 'Error Details by URL — continued')
               y = 20
             }
             doc.setFontSize(7.5)
@@ -369,23 +358,7 @@ export const TestResults: React.FC<TestResultsProps> = ({ results, phases }) => 
         }
       }
 
-      // ── Footer on every page ────────────────────────────────────────────
-      const pageCount = doc.getNumberOfPages()
-      for (let i = 1; i <= pageCount; i++) {
-        doc.setPage(i)
-        doc.setFillColor(...navy)
-        doc.rect(0, 291, pageW, 6, 'F')
-        doc.setTextColor(...white)
-        doc.setFontSize(7)
-        doc.setFont('helvetica', 'normal')
-        doc.text(`Page ${i} of ${pageCount}`, pageW / 2, 295.5, { align: 'center' })
-        if (i === pageCount) {
-          doc.setTextColor(180, 180, 180)
-          doc.setFontSize(6)
-          doc.text('powered by AlgoAtWork', 14, 295.5)
-        }
-      }
-
+      drawFooter(doc)
       doc.save(`performance-report-${(results.testId ?? 'export').slice(0, 8)}.pdf`)
     } finally {
       setExporting(false)

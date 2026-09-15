@@ -10,6 +10,7 @@ import { Badge } from "~/components/ui/badge";
 import { useLiveScenarioTracking } from "~/hooks/useLiveScenarioTracking";
 import { Activity, CheckCircle2, XCircle, Loader2 } from "lucide-react";
 import Link from "next/link";
+import { pickPercentile, toPercent } from "~/lib/pdf-report";
 
 function formatMs(value: number | null): string {
   if (value === null || value === undefined) return "—";
@@ -17,7 +18,7 @@ function formatMs(value: number | null): string {
 }
 
 function formatPct(value: number): string {
-  return `${(value * 100).toFixed(1)}%`;
+  return `${toPercent(value).toFixed(1)}%`;
 }
 
 export function ScenarioLiveTracking() {
@@ -117,9 +118,9 @@ export function ScenarioLiveTracking() {
                       />
                       <Stat label="Avg latency" value={formatMs(s.finalMetrics.summary.avg_latency_ms)} />
                       <Stat label="Throughput" value={`${s.finalMetrics.summary.throughput_per_sec.toFixed(1)}/s`} />
-                      <Stat label="p50" value={formatMs(s.finalMetrics.summary.percentiles?.p50 ?? null)} />
-                      <Stat label="p95" value={formatMs(s.finalMetrics.summary.percentiles?.p95 ?? null)} />
-                      <Stat label="p99" value={formatMs(s.finalMetrics.summary.percentiles?.p99 ?? null)} />
+                      <Stat label="p50" value={formatMs(pickPercentile(s.finalMetrics.summary.percentiles as any, 50))} />
+                      <Stat label="p95" value={formatMs(pickPercentile(s.finalMetrics.summary.percentiles as any, 95))} />
+                      <Stat label="p99" value={formatMs(pickPercentile(s.finalMetrics.summary.percentiles as any, 99))} />
                       <Stat label="Duration" value={`${s.finalMetrics.summary.duration_seconds.toFixed(1)}s`} />
                     </div>
                   </div>
@@ -142,9 +143,14 @@ export function ScenarioLiveTracking() {
                             <tr key={label} className="border-b last:border-0">
                               <td className="py-2 pr-4 font-mono text-xs">{label}</td>
                               <td className="py-2 pr-4">{m.total_requests}</td>
-                              <td className="py-2 pr-4">{m.success_rate.toFixed(1)}%</td>
+                              <td className="py-2 pr-4">{toPercent(m.success_rate).toFixed(1)}%</td>
                               <td className="py-2 pr-4">{m.average_time !== null ? Math.round(m.average_time) : "—"}</td>
-                              <td className="py-2 pr-4">{m.percentiles?.p95 ? Math.round(m.percentiles.p95) : "—"}</td>
+                              <td className="py-2 pr-4">
+                                {(() => {
+                                  const p95 = pickPercentile(m.percentiles as any, 95);
+                                  return p95 !== null ? Math.round(p95) : "—";
+                                })()}
+                              </td>
                               <td className="py-2 pr-4">
                                 {m.errors.length === 0 ? (
                                   <span className="text-gray-400">none</span>

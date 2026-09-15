@@ -15,6 +15,10 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from "recharts";
 import { gautengLogoB64 } from "~/lib/gauteng-logo-b64";
+import {
+  REPORT_COLORS, addChart, captureChart, drawFooter, narrativeBox,
+  pageBand, pickPercentile, sectionHeading, toPercent, verdictCellStyler, verdictFor,
+} from "~/lib/pdf-report";
 import type {
   ScenarioFinalMetrics,
   ScenarioLabelMetric,
@@ -25,54 +29,81 @@ function ms(value: number | null | undefined): string {
   return `${Math.round(value)} ms`;
 }
 
-function pct(value: number): string {
-  return `${(value * 100).toFixed(1)}%`;
+function pct(value: number | null | undefined): string {
+  return `${toPercent(value ?? 0).toFixed(1)}%`;
 }
 
-// ── SVG → PNG helper (same approach as the load-test report) ────────────────
-function svgToPng(svgEl: SVGSVGElement): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const w = svgEl.clientWidth || Number(svgEl.getAttribute("width") ?? 600);
-    const h = svgEl.clientHeight || Number(svgEl.getAttribute("height") ?? 200);
-
-    let svgStr = new XMLSerializer().serializeToString(svgEl);
-    if (!svgStr.includes("xmlns="))
-      svgStr = svgStr.replace("<svg", '<svg xmlns="http://www.w3.org/2000/svg"');
-
-    const blob = new Blob([svgStr], { type: "image/svg+xml;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const img = new Image();
-
-    img.onload = () => {
-      const canvas = document.createElement("canvas");
-      canvas.width = w * 2;
-      canvas.height = h * 2;
-      const ctx = canvas.getContext("2d")!;
-      ctx.scale(2, 2);
-      ctx.fillStyle = "#ffffff";
-      ctx.fillRect(0, 0, w, h);
-      ctx.drawImage(img, 0, 0, w, h);
-      URL.revokeObjectURL(url);
-      resolve(canvas.toDataURL("image/png"));
-    };
-    img.onerror = () => {
-      URL.revokeObjectURL(url);
-      reject(new Error("svg load failed"));
-    };
-    img.src = url;
-  });
+/** Robust success rate for one step: tolerates a 0-1 fraction or a 0-100
+ *  percentage from the backend — this is what "success rate per step" chart
+ *  showing blank bars turned out to be: a fraction plotted on a 0-100 axis. */
+function stepSuccessRate(m: ScenarioLabelMetric): number {
+  return toPercent(m.success_rate ?? 0);
 }
 
-async function captureChart(ref: React.RefObject<HTMLDivElement | null>): Promise<string | null> {
-  if (!ref.current) return null;
-  await new Promise((r) => setTimeout(r, 150));
-  try {
-    const svgEl = ref.current.querySelector("svg");
-    if (!svgEl) return null;
-    return await svgToPng(svgEl as SVGSVGElement);
-  } catch {
-    return null;
+/** Percentile lookups tolerant of key-naming drift (p50 / P50 / "50" / …). */
+function summaryPercentile(summary: ScenarioFinalMetrics["summary"], p: 50 | 95 | 99): number | null {
+  return pickPercentile(summary?.percentiles as any, p);
+}
+function stepPercentile(m: ScenarioLabelMetric, p: 50 | 95 | 99): number | null {
+  return pickPercentile(m.percentiles as any, p);
+}
+
+function buildNarrative(
+  summary: ScenarioFinalMetrics["summary"],
+  stepEntries: [string, ScenarioLabelMetric][],
+): { right: string[]; wrong: string[] } {
+  const total = summary.total_samples ?? 0;
+  const successCount = summary.success_count ?? 0;
+  const errorRate = toPercent(summary.error_rate ?? 0);
+  const right: string[] = [];
+  const wrong: string[] = [];
+
+  if (total > 0) {
+    right.push(
+      `${successCount.toLocaleString()} of ${total.toLocaleString()} sample(s) completed successfully (${(100 - errorRate).toFixed(1)}%) across ${stepEntries.length} step(s).`,
+    );
   }
+
+  const ranked = stepEntries
+    .map(([label, m]) => ({ label, m, rate: stepSuccessRate(m), samples: m.total_requests ?? 0 }))
+    .filter((s) => s.samples > 0);
+
+  const best = [...ranked].sort((a, b) => b.rate - a.rate)[0];
+  if (best && best.rate >= 99) {
+    right.push(`Step "${best.label}" was fully reliable — ${best.samples.toLocaleString()} sample(s) at ${best.rate.toFixed(1)}% success.`);
+  }
+
+  const p50 = summaryPercentile(summary, 50);
+  const p99 = summaryPercentile(summary, 99);
+  if (p50 && p99 && p99 > p50 * 3) {
+    wrong.push(`Tail latency is elevated — P99 (${Math.round(p99)}ms) is ${(p99 / p50).toFixed(1)}× the median (${Math.round(p50)}ms), suggesting inconsistent response times.`);
+  } else if (p50 !== null) {
+    right.push(`Response times were consistent — median latency of ${Math.round(p50)}ms.`);
+  }
+  if (p50 === null && p99 === null && total > 0) {
+    wrong.push(`Latency percentiles were not reported for this run — this is common for a single-sample functional run, since percentiles need multiple samples to be meaningful.`);
+  }
+
+  const failing = ranked.filter((s) => s.rate < 99).sort((a, b) => a.rate - b.rate);
+  if (failing.length > 0) {
+    const worst = failing[0]!;
+    const errCount = worst.m.errors?.reduce((sum, e) => sum + e.count, 0) ?? 0;
+    const topError = [...(worst.m.errors ?? [])].sort((a, b) => b.count - a.count)[0];
+    wrong.push(
+      `Step "${worst.label}" was the weakest — ${worst.rate.toFixed(1)}% success over ${worst.samples.toLocaleString()} sample(s), with ${errCount} failure(s)` +
+      (topError ? `, most commonly "${topError.status_code}: ${topError.error}".` : "."),
+    );
+    if (failing.length > 1) {
+      wrong.push(`${failing.length} of ${ranked.length} steps had at least one failure.`);
+    }
+  } else if (ranked.length > 0) {
+    wrong.push("No issues were identified — every step stayed at or above a 99% success rate.");
+  }
+
+  if (right.length === 0) right.push("No samples were recorded for this run.");
+  if (wrong.length === 0) wrong.push("No issues were identified.");
+
+  return { right, wrong };
 }
 
 export function ScenarioResultsView({
@@ -98,13 +129,18 @@ export function ScenarioResultsView({
     metrics.per_label_metrics ?? {};
   const stepEntries = Object.entries(perLabel);
   const stepsWithErrors = stepEntries.filter(([, m]) => m.errors && m.errors.length > 0);
-  const isSuccess = (summary.error_rate ?? 0) === 0;
+  const isSuccess = toPercent(summary.error_rate ?? 0) === 0;
+
+  const p50 = summaryPercentile(summary, 50);
+  const p95 = summaryPercentile(summary, 95);
+  const p99 = summaryPercentile(summary, 99);
+  const hasPercentiles = p50 !== null || p95 !== null || p99 !== null;
 
   const stepChartData = stepEntries.map(([label, m]) => ({
     step: label.length > 18 ? label.slice(0, 16) + "…" : label,
     fullLabel: label,
     avgTime: m.average_time ?? 0,
-    successRate: Number((m.success_rate ?? 0).toFixed(1)),
+    successRate: Number(stepSuccessRate(m).toFixed(1)),
     errors: m.errors?.reduce((sum, e) => sum + e.count, 0) ?? 0,
   }));
 
@@ -114,15 +150,10 @@ export function ScenarioResultsView({
     try {
       const { jsPDF } = await import("jspdf");
       const { default: autoTable } = await import("jspdf-autotable");
+      const { navy, gold, charcoal, rowAlt, white } = REPORT_COLORS;
 
       const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
       const pageW = 210;
-
-      const navy: [number, number, number] = [27, 58, 107];
-      const gold: [number, number, number] = [200, 162, 50];
-      const charcoal: [number, number, number] = [44, 44, 44];
-      const rowAlt: [number, number, number] = [245, 247, 250];
-      const white: [number, number, number] = [255, 255, 255];
 
       const [avgTimeImg, successImg, errorsImg] = await Promise.all([
         captureChart(pdfAvgTimeRef),
@@ -130,49 +161,8 @@ export function ScenarioResultsView({
         captureChart(pdfErrorsRef),
       ]);
 
-      const sectionHeading = (text: string, y: number) => {
-        doc.setTextColor(...navy);
-        doc.setFontSize(10);
-        doc.setFont("helvetica", "bold");
-        doc.text(text, 14, y);
-        doc.setDrawColor(...gold);
-        doc.setLineWidth(0.6);
-        doc.line(14, y + 1.5, pageW - 14, y + 1.5);
-        doc.setTextColor(...charcoal);
-      };
-
-      const pageBand = (title: string) => {
-        doc.setFillColor(...navy);
-        doc.rect(0, 0, pageW, 12, "F");
-        doc.setFillColor(...gold);
-        doc.rect(0, 12, pageW, 1, "F");
-        doc.setTextColor(...white);
-        doc.setFontSize(8.5);
-        doc.setFont("helvetica", "bold");
-        doc.text(title, 14, 8.5);
-        doc.setTextColor(...charcoal);
-      };
-
-      const addChart = (img: string | null, x: number, y: number, w: number, h: number, title: string) => {
-        doc.setTextColor(...navy);
-        doc.setFontSize(9);
-        doc.setFont("helvetica", "bold");
-        doc.text(title, x, y);
-        doc.setDrawColor(...gold);
-        doc.setLineWidth(0.5);
-        doc.line(x, y + 1.5, x + w, y + 1.5);
-        if (img) {
-          doc.addImage(img, "PNG", x, y + 4, w, h);
-        } else {
-          doc.setFontSize(7.5);
-          doc.setFont("helvetica", "italic");
-          doc.setTextColor(160, 160, 160);
-          doc.text("Chart unavailable", x + w / 2, y + h / 2 + 4, { align: "center" });
-        }
-        doc.setTextColor(...charcoal);
-      };
-
       const modeLabel = mode === "functional" ? "Functional Test" : mode === "load" ? "Scenario Load Test" : "Scenario Test";
+      const narrative = buildNarrative(summary, stepEntries);
 
       // ════════════════════════════ PAGE 1 — COVER + SUMMARY ════════════════
       doc.setFillColor(...navy);
@@ -203,7 +193,7 @@ export function ScenarioResultsView({
         143, 40, { align: "center" },
       );
 
-      sectionHeading("Test Overview", 53);
+      sectionHeading(doc, "Test Overview", 53);
 
       autoTable(doc, {
         startY: 57,
@@ -214,7 +204,7 @@ export function ScenarioResultsView({
           ["Total Samples", (summary.total_samples ?? 0).toLocaleString()],
           ["Successful Samples", (summary.success_count ?? 0).toLocaleString()],
           ["Failed Samples", (summary.error_count ?? 0).toLocaleString()],
-          ["Error Rate", pct(summary.error_rate ?? 0)],
+          ["Error Rate", pct(summary.error_rate)],
           ["Throughput", `${(summary.throughput_per_sec ?? 0).toFixed(1)} req/s`],
           ["Duration", `${(summary.duration_seconds ?? 0).toFixed(1)}s`],
         ],
@@ -228,12 +218,14 @@ export function ScenarioResultsView({
       autoTable(doc, {
         startY: 57,
         head: [["Percentile", "Time (ms)"]],
-        body: [
-          ["Avg latency", ms(summary.avg_latency_ms)],
-          ["P50 — Median", ms(summary.percentiles?.p50)],
-          ["P95", ms(summary.percentiles?.p95)],
-          ["P99", ms(summary.percentiles?.p99)],
-        ],
+        body: hasPercentiles
+          ? [
+              ["Avg latency", ms(summary.avg_latency_ms)],
+              ["P50 — Median", ms(p50)],
+              ["P95", ms(p95)],
+              ["P99", ms(p99)],
+            ]
+          : [["Avg latency", ms(summary.avg_latency_ms)], ["Percentiles", "Not available"]],
         headStyles: { fillColor: navy, textColor: white, fontStyle: "bold", fontSize: 8 },
         bodyStyles: { fontSize: 8, textColor: charcoal },
         alternateRowStyles: { fillColor: rowAlt },
@@ -241,48 +233,61 @@ export function ScenarioResultsView({
         tableWidth: 84,
       });
 
-      const afterTables = (doc as any).lastAutoTable.finalY + 10;
-      addChart(avgTimeImg, 14, afterTables, 182, 65, "Average Response Time per Step (ms)");
+      const afterTables = (doc as any).lastAutoTable.finalY + 8;
+      const afterNarrative = narrativeBox(doc, "What went right", narrative.right, afterTables, REPORT_COLORS.green);
+      const afterNarrative2 = narrativeBox(doc, "What went wrong", narrative.wrong, afterNarrative, REPORT_COLORS.red);
+      addChart(doc, avgTimeImg, 14, afterNarrative2, 182, 58, "Average Response Time per Step (ms)");
 
       // ════════════════════════ PAGE 2 — PER-STEP BREAKDOWN ═════════════════
       doc.addPage();
-      pageBand("Per-Step Breakdown");
+      pageBand(doc, "Per-Step Breakdown");
 
       if (stepEntries.length > 0) {
         autoTable(doc, {
           startY: 17,
-          head: [["Step", "Samples", "Success", "Avg (ms)", "P95 (ms)", "Errors"]],
-          body: stepEntries.map(([label, m]) => [
-            label.length > 40 ? label.slice(0, 37) + "…" : label,
-            m.total_requests ?? 0,
-            `${(m.success_rate ?? 0).toFixed(1)}%`,
-            m.average_time !== null ? Math.round(m.average_time) : "—",
-            m.percentiles?.p95 ? Math.round(m.percentiles.p95) : "—",
-            m.errors?.reduce((sum, e) => sum + e.count, 0) ?? 0,
-          ]),
+          head: [["Step", "Samples", "Success", "Avg (ms)", "P95 (ms)", "Errors", "Status"]],
+          body: stepEntries.map(([label, m]) => {
+            const rate = stepSuccessRate(m);
+            const { label: verdictLabel } = verdictFor(rate, m.total_requests ?? 0);
+            const p95Step = stepPercentile(m, 95);
+            return [
+              label.length > 34 ? label.slice(0, 31) + "…" : label,
+              m.total_requests ?? 0,
+              `${rate.toFixed(1)}%`,
+              m.average_time !== null ? Math.round(m.average_time) : "—",
+              p95Step !== null ? Math.round(p95Step) : "—",
+              m.errors?.reduce((sum, e) => sum + e.count, 0) ?? 0,
+              verdictLabel,
+            ];
+          }),
           headStyles: { fillColor: navy, textColor: white, fontStyle: "bold", fontSize: 7.5 },
           bodyStyles: { fontSize: 7.5, textColor: charcoal },
           alternateRowStyles: { fillColor: rowAlt },
           margin: { left: 14, right: 14 },
+          didParseCell: verdictCellStyler((rowIndex) => {
+            const entry = stepEntries[rowIndex];
+            if (!entry) return null;
+            return { rate: stepSuccessRate(entry[1]), samples: entry[1].total_requests ?? 0 };
+          }),
         });
       }
 
       const chartTop = stepEntries.length > 0 ? (doc as any).lastAutoTable.finalY + 10 : 20;
-      addChart(successImg, 14, chartTop, 90, 55, "Success Rate per Step (%)");
+      addChart(doc, successImg, 14, chartTop, 90, 55, "Success Rate per Step (%)");
       if ((summary.error_count ?? 0) > 0) {
-        addChart(errorsImg, 112, chartTop, 84, 55, "Errors per Step");
+        addChart(doc, errorsImg, 112, chartTop, 84, 55, "Errors per Step");
       }
 
       // ═══════════════════════ PAGE 3 — ERROR DETAILS ═══════════════════════
       if (stepsWithErrors.length > 0) {
         doc.addPage();
-        pageBand("Error Details by Step");
+        pageBand(doc, "Error Details by Step");
 
         let y = 20;
         for (const [label, m] of stepsWithErrors) {
           if (y > 265) {
             doc.addPage();
-            pageBand("Error Details by Step — continued");
+            pageBand(doc, "Error Details by Step — continued");
             y = 20;
           }
           doc.setFontSize(7.5);
@@ -303,23 +308,7 @@ export function ScenarioResultsView({
         }
       }
 
-      // ── Footer ───────────────────────────────────────────────────────────
-      const pageCount = doc.getNumberOfPages();
-      for (let i = 1; i <= pageCount; i++) {
-        doc.setPage(i);
-        doc.setFillColor(...navy);
-        doc.rect(0, 291, pageW, 6, "F");
-        doc.setTextColor(...white);
-        doc.setFontSize(7);
-        doc.setFont("helvetica", "normal");
-        doc.text(`Page ${i} of ${pageCount}`, pageW / 2, 295.5, { align: "center" });
-        if (i === pageCount) {
-          doc.setTextColor(180, 180, 180);
-          doc.setFontSize(6);
-          doc.text("powered by AlgoAtWork", 14, 295.5);
-        }
-      }
-
+      drawFooter(doc);
       doc.save(`functional-test-report-${(testId ?? "export").slice(0, 8)}.pdf`);
     } finally {
       setExporting(false);
@@ -357,16 +346,21 @@ export function ScenarioResultsView({
             <Stat label="Total samples" value={(summary.total_samples ?? 0).toLocaleString()} />
             <Stat
               label="Error rate"
-              value={pct(summary.error_rate ?? 0)}
-              accent={(summary.error_rate ?? 0) > 0 ? "danger" : "ok"}
+              value={pct(summary.error_rate)}
+              accent={toPercent(summary.error_rate ?? 0) > 0 ? "danger" : "ok"}
             />
             <Stat label="Avg latency" value={ms(summary.avg_latency_ms)} />
             <Stat label="Throughput" value={`${(summary.throughput_per_sec ?? 0).toFixed(1)}/s`} />
-            <Stat label="p50" value={ms(summary.percentiles?.p50)} />
-            <Stat label="p95" value={ms(summary.percentiles?.p95)} />
-            <Stat label="p99" value={ms(summary.percentiles?.p99)} />
+            <Stat label="p50" value={hasPercentiles ? ms(p50) : "n/a"} />
+            <Stat label="p95" value={hasPercentiles ? ms(p95) : "n/a"} />
+            <Stat label="p99" value={hasPercentiles ? ms(p99) : "n/a"} />
             <Stat label="Duration" value={`${(summary.duration_seconds ?? 0).toFixed(1)}s`} />
           </div>
+          {!hasPercentiles && (summary.total_samples ?? 0) > 0 && (
+            <p className="mt-3 text-xs text-gray-500">
+              Latency percentiles weren't reported for this run — typical for a single-sample functional run, since percentiles need multiple samples to be meaningful.
+            </p>
+          )}
         </CardContent>
       </Card>
 
@@ -385,27 +379,36 @@ export function ScenarioResultsView({
                   <th className="py-2 pr-4">Avg (ms)</th>
                   <th className="py-2 pr-4">p95 (ms)</th>
                   <th className="py-2 pr-4">Errors</th>
+                  <th className="py-2 pr-4">Status</th>
                 </tr>
               </thead>
               <tbody>
-                {stepEntries.map(([label, m]) => (
-                  <tr key={label} className="border-b last:border-0">
-                    <td className="py-2 pr-4 font-mono text-xs">{label}</td>
-                    <td className="py-2 pr-4">{m.total_requests}</td>
-                    <td className="py-2 pr-4">{m.success_rate.toFixed(1)}%</td>
-                    <td className="py-2 pr-4">{m.average_time !== null ? Math.round(m.average_time) : "—"}</td>
-                    <td className="py-2 pr-4">{m.percentiles?.p95 ? Math.round(m.percentiles.p95) : "—"}</td>
-                    <td className="py-2 pr-4">
-                      {m.errors.length === 0 ? (
-                        <span className="text-gray-400">none</span>
-                      ) : (
-                        <span className="text-red-600">
-                          {m.errors.reduce((sum, e) => sum + e.count, 0)}
-                        </span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
+                {stepEntries.map(([label, m]) => {
+                  const rate = stepSuccessRate(m);
+                  const { verdict, label: verdictLabel } = verdictFor(rate, m.total_requests ?? 0);
+                  const p95Step = stepPercentile(m, 95);
+                  const verdictClass =
+                    verdict === "healthy" ? "text-green-600" : verdict === "degraded" ? "text-amber-600" : verdict === "failing" ? "text-red-600" : "text-gray-400";
+                  return (
+                    <tr key={label} className="border-b last:border-0">
+                      <td className="py-2 pr-4 font-mono text-xs">{label}</td>
+                      <td className="py-2 pr-4">{m.total_requests}</td>
+                      <td className="py-2 pr-4">{rate.toFixed(1)}%</td>
+                      <td className="py-2 pr-4">{m.average_time !== null ? Math.round(m.average_time) : "—"}</td>
+                      <td className="py-2 pr-4">{p95Step !== null ? Math.round(p95Step) : "—"}</td>
+                      <td className="py-2 pr-4">
+                        {m.errors.length === 0 ? (
+                          <span className="text-gray-400">none</span>
+                        ) : (
+                          <span className="text-red-600">
+                            {m.errors.reduce((sum, e) => sum + e.count, 0)}
+                          </span>
+                        )}
+                      </td>
+                      <td className={`py-2 pr-4 font-medium ${verdictClass}`}>{verdictLabel}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -459,7 +462,7 @@ export function ScenarioResultsView({
       {/* Hidden chart containers for PDF capture */}
       <div style={{ position: "fixed", left: "-9999px", top: 0, pointerEvents: "none", zIndex: -1 }}>
         <div ref={pdfAvgTimeRef} style={{ background: "white", padding: "8px", width: "680px" }}>
-          <BarChart width={660} height={175} data={stepChartData}>
+          <BarChart width={660} height={165} data={stepChartData}>
             <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
             <XAxis dataKey="step" stroke="#6b7280" tick={{ fontSize: 10 }} />
             <YAxis stroke="#6b7280" unit="ms" tick={{ fontSize: 11 }} />
