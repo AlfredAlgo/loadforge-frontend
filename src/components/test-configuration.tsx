@@ -28,6 +28,8 @@ export function TestConfiguration() {
   const [isConnected, setIsConnected] = useState(false);
   const [testName, setTestName] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [brsUploading, setBrsUploading] = useState(false);
+  const [brsSummary, setBrsSummary] = useState<{ filename: string; text: string } | null>(null);
 
   const router = useRouter();
 
@@ -114,6 +116,44 @@ export function TestConfiguration() {
       phase_length: rampDurationNum,
       hold_duration: holdDurationNum,
     });
+  };
+
+  const handleBrsUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const lower = file.name.toLowerCase();
+    if (!lower.endsWith(".pdf") && !lower.endsWith(".txt")) {
+      setError("Please upload a .pdf or .txt BRS document.");
+      e.target.value = "";
+      return;
+    }
+    setError(null);
+    setBrsSummary(null);
+    setBrsUploading(true);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const res = await fetch("/api/brs/parse", { method: "POST", body: form });
+      const body = await res.json();
+      if (!res.ok) {
+        setError(body.error || "Failed to parse BRS document.");
+        return;
+      }
+
+      const data = body as { test_name: string; urls: string[]; summary: string };
+
+      if (data.test_name && !testName.trim()) setTestName(data.test_name);
+      if (data.urls.length > 0) {
+        setUrls(data.urls.map((url, i) => ({ id: Date.now() + i, url })));
+      }
+
+      setBrsSummary({ filename: file.name, text: data.summary });
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : "Failed to parse BRS document.");
+    } finally {
+      setBrsUploading(false);
+      e.target.value = "";
+    }
   };
 
   const exportConfig = () => {
@@ -268,6 +308,47 @@ export function TestConfiguration() {
                 disabled={start.isPending}
               />
             </div>
+          </CardContent>
+        </Card>
+        <Card className="border-gray-200">
+          <CardHeader>
+            <CardTitle className="text-gray-900">BRS Document (optional)</CardTitle>
+            <CardDescription className="text-gray-600">
+              Upload a Business Requirements Specification to pre-fill the test name and any referenced URLs. Concurrency and duration aren't part of the standard BRS template, so you'll still set those yourself.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <label>
+              <input
+                type="file"
+                accept=".pdf,.txt,application/pdf,text/plain"
+                onChange={handleBrsUpload}
+                className="hidden"
+                disabled={brsUploading || start.isPending}
+              />
+              <Button
+                variant="outline"
+                className="border-gray-300 bg-transparent"
+                asChild
+                disabled={brsUploading || start.isPending}
+              >
+                <span>
+                  {brsUploading ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <Upload className="mr-2 h-4 w-4" />
+                  )}
+                  {brsUploading ? "Reading document…" : "Upload BRS (.pdf or .txt)"}
+                </span>
+              </Button>
+            </label>
+            {brsSummary && (
+              <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-sm">
+                <p className="font-medium text-blue-800">Pre-filled from {brsSummary.filename}</p>
+                <p className="mt-1 text-blue-700">{brsSummary.text}</p>
+                <p className="mt-1 text-xs text-blue-600">Review the fields below before starting the test.</p>
+              </div>
+            )}
           </CardContent>
         </Card>
         <Card className="border-gray-200">
