@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { PDFParse } from "pdf-parse";
+import * as mammoth from "mammoth";
 import { auth } from "~/lib/auth";
 
 export const runtime = "nodejs";
@@ -7,6 +8,21 @@ export const dynamic = "force-dynamic";
 
 const MAX_BYTES = 10 * 1024 * 1024;
 const URL_RE = /https?:\/\/[^\s"'<>)\]]+/g;
+const MIN_READABLE_CHARS = 20;
+
+const DOCX_MIME =
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
+// Other field labels from the standard Gauteng BRS/SRS template — if one of
+// these shows up where a title's value should be, the table's cells almost
+// certainly extracted out of row order, so treat it as "not found" rather
+// than mistaking a neighboring label for the title.
+const KNOWN_LABEL_RE =
+  /^(system\s*id|date\s*prepared|requested\s*by|date\s*required|new\s*functionality|impacted\s*stakeholders|purpose|root\s*cause|current\s*process|requirement|additional\s*requirement|target\s*outcome|comments|impact\s*level|priority\s*level|approval|role|name|signature|date)\b/i;
+
+function looksLikeUsableTitle(value: string | undefined): value is string {
+  return !!value && /[a-z0-9]/i.test(value) && !KNOWN_LABEL_RE.test(value);
+}
 
 /**
  * Real Gauteng BRS/SRS documents follow one fixed template — a "Title:" row
@@ -21,15 +37,19 @@ function extractTestName(text: string, fallbackFilename: string): string {
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
-    const inline = /^title\s*:?\s*(.+)$/i.exec(line);
-    if (inline?.[1] && !/^title$/i.test(inline[1].trim())) {
-      return inline[1].trim();
-    }
-    if (/^title\s*:?$/i.test(line) && lines[i + 1]) {
-      return lines[i + 1]!;
+    // Colon is required (not optional) here — otherwise a bare "Title:" line
+    // with nothing after it lets the regex backtrack into capturing the
+    // colon itself as the "value".
+    const inline = /^title\s*:\s*(.+)$/i.exec(line);
+    const inlineValue = inline?.[1]?.trim();
+    if (looksLikeUsableTitle(inlineValue)) return inlineValue;
+
+    if (/^title\s*:?\s*$/i.test(line)) {
+      const next = lines[i + 1]?.trim();
+      if (looksLikeUsableTitle(next)) return next;
     }
   }
-  return fallbackFilename.replace(/\.(pdf|txt)$/i, "").replace(/[_-]+/g, " ").trim();
+  return fallbackFilename.replace(/\.(pdf|docx|txt)$/i, "").replace(/[_-]+/g, " ").trim();
 }
 
 /** Bonus, not the main point: some BRS variants do reference an endpoint. */
@@ -52,10 +72,11 @@ export async function POST(request: Request) {
 
   const lowerName = file.name.toLowerCase();
   const isPdf = lowerName.endsWith(".pdf") || file.type === "application/pdf";
+  const isDocx = lowerName.endsWith(".docx") || file.type === DOCX_MIME;
   const isText = lowerName.endsWith(".txt") || file.type === "text/plain";
-  if (!isPdf && !isText) {
+  if (!isPdf && !isDocx && !isText) {
     return NextResponse.json(
-      { error: "Please upload a .pdf or .txt BRS document." },
+      { error: "Please upload a .pdf, .docx, or .txt BRS document." },
       { status: 400 },
     );
   }
@@ -64,6 +85,9 @@ export async function POST(request: Request) {
   }
 
   const bytes = Buffer.from(await file.arrayBuffer());
+  const cantReadMessage =
+    "Could not find readable text in this file — it's likely a scanned image rather than a real document. " +
+    "Try the Word (.docx) version if one exists, or use \"Enter manually\" below to type in the details yourself.";
 
   let text: string;
   if (isPdf) {
@@ -72,15 +96,26 @@ export async function POST(request: Request) {
       text = (await parser.getText()).text;
     } catch (error) {
       console.error("[brs/parse] PDF text extraction failed:", error);
-      return NextResponse.json(
-        { error: "Could not read this PDF — it may be scanned/image-only or corrupted." },
-        { status: 422 },
-      );
+      return NextResponse.json({ error: cantReadMessage }, { status: 422 });
     } finally {
       await parser.destroy();
     }
+  } else if (isDocx) {
+    try {
+      text = (await mammoth.extractRawText({ buffer: bytes })).value;
+    } catch (error) {
+      console.error("[brs/parse] DOCX text extraction failed:", error);
+      return NextResponse.json(
+        { error: "Could not read this .docx file — it may be corrupted or password-protected." },
+        { status: 422 },
+      );
+    }
   } else {
     text = bytes.toString("utf-8");
+  }
+
+  if (text.replace(/\s+/g, "").length < MIN_READABLE_CHARS) {
+    return NextResponse.json({ error: cantReadMessage }, { status: 422 });
   }
 
   const testName = extractTestName(text, file.name);
