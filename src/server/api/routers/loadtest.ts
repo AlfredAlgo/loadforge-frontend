@@ -1,20 +1,25 @@
 // loadforge/src/server/api/routers/loadtest.ts
 import { z } from "zod"
-import { createTRPCRouter, publicProcedure , protectedProcedure} from "~/server/api/trpc"
+import { createTRPCRouter, protectedProcedure} from "~/server/api/trpc"
 import { testResults, completeTests, testPhases } from "~/server/db/schema" // Import your schema tables
-import { eq, and } from "drizzle-orm" // Import eq for equality comparisons
+import { eq } from "drizzle-orm" // Import eq for equality comparisons
+import { canViewTest } from "~/server/api/access"
+import { TRPCError } from "@trpc/server"
 
 export const loadTestRouter = createTRPCRouter({
 
   // Get test results
   getResults: protectedProcedure.input(z.object({ testId: z.string() })).query(async ({ ctx, input }) => {
-    const userId = ctx.user.id;
-    // We expect testId to be a string, matching the varchar type in the schema
+    // Visibility is checked against the test itself (own / same team /
+    // admin), not a strict user_id match — so a teammate can open a
+    // result that belongs to someone else on their team.
+    const test = await ctx.db.query.completeTests.findFirst({ where: eq(completeTests.id, input.testId) });
+    if (!canViewTest(ctx.user, test)) {
+      throw new TRPCError({ code: "FORBIDDEN", message: "You don't have access to this test." });
+    }
+
     const result = await ctx.db.query.testResults.findFirst({
-      where: and(
-        eq(testResults.test_id, input.testId),
-        eq(testResults.user_id, userId)
-      )
+      where: eq(testResults.test_id, input.testId),
     });
 
     if (!result) {
@@ -47,16 +52,15 @@ export const loadTestRouter = createTRPCRouter({
 getTestPhases: protectedProcedure
   .input(z.object({ testId: z.string() }))
   .query(async ({ ctx, input }) => {
-    const userId = ctx.user.id;
+    const test = await ctx.db.query.completeTests.findFirst({ where: eq(completeTests.id, input.testId) });
+    if (!canViewTest(ctx.user, test)) {
+      throw new TRPCError({ code: "FORBIDDEN", message: "You don't have access to this test." });
+    }
+
     const phases = await ctx.db
       .select()
       .from(testPhases)
-      .where(
-        and(
-          eq(testPhases.test_id, input.testId),
-          eq(testPhases.user_id, userId)
-        )
-      )
+      .where(eq(testPhases.test_id, input.testId))
       .orderBy(testPhases.phase_number);
 
     return phases.map((phase) => ({
@@ -67,8 +71,8 @@ getTestPhases: protectedProcedure
       successCount: phase.success_count,
       errorCount: phase.error_count,
       percentiles: phase.percentile as { p50: number; p95: number; p99: number },
-      successRate: phase.requests > 0 
-        ? ((phase.success_count / phase.requests) * 100) 
+      successRate: phase.requests > 0
+        ? ((phase.success_count / phase.requests) * 100)
         : 0,
     }));
   }),

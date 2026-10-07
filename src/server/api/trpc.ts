@@ -10,6 +10,8 @@ import { CreateWSSContextFnOptions } from "@trpc/server/adapters/ws";
 import { type CreateNextContextOptions } from "@trpc/server/adapters/next";
 import type { IncomingHttpHeaders } from "http";
 import { auth } from "~/lib/auth";
+import { eq } from "drizzle-orm";
+import { users } from "../db/schema";
 
 // Guard against Next.js dev-mode HMR re-running this module — each re-run
 // would add another set of socket listeners and eventbus subscribers, so a
@@ -38,17 +40,35 @@ function toHeaders(headers: IncomingHttpHeaders): Headers {
   }
   return result;
 }
+// better-auth's session.user only carries the fields better-auth itself
+// knows about (id/name/email/...) — role and teamId live in our own users
+// table, so every request looks the row up to attach them. This is one
+// extra indexed lookup per request, which is cheap at this app's scale.
+async function withRoleAndTeam(sessionUser: { id: string } & Record<string, unknown> | null | undefined) {
+  if (!sessionUser) return null;
+  const row = await db.query.users.findFirst({
+    where: eq(users.id, sessionUser.id),
+    columns: { role: true, teamId: true },
+  });
+  return {
+    ...sessionUser,
+    role: row?.role ?? "tester",
+    teamId: row?.teamId ?? null,
+  };
+}
+
 export const createWSContext = async (opts: CreateWSSContextFnOptions) => {
   // Try to extract HTTP headers from available fields (req or connection), fallback to empty object
   const incomingHeaders: IncomingHttpHeaders =
     (opts as any)?.req?.headers ?? (opts as any)?.connection?.headers ?? {};
     const headers = toHeaders(incomingHeaders);
     const session = await auth.api.getSession({ headers });
+    const user = await withRoleAndTeam(session?.user);
   return {
     headers: incomingHeaders,
     db,
     session,
-    user: session?.user || null,
+    user,
   };
 };
 export const createTRPCContext = async (
@@ -58,12 +78,13 @@ export const createTRPCContext = async (
   const incomingHeaders = (opts as any)?.req?.headers ?? (opts as any)?.headers ?? {};
   const headers = toHeaders(incomingHeaders);
   const session = await auth.api.getSession({ headers: incomingHeaders });
+  const user = await withRoleAndTeam(session?.user);
 
   return {
     headers: incomingHeaders,
     db,
     session,
-    user: session?.user || null,
+    user,
   };
 };
 
@@ -93,8 +114,24 @@ const isAuthed = t.middleware(({ next, ctx }) => {
   });
 });
 
+const isAdmin = t.middleware(({ next, ctx }) => {
+  if (!ctx.session || !ctx.user) {
+    throw new TRPCError({ code: "UNAUTHORIZED" });
+  }
+  if (ctx.user.role !== "admin") {
+    throw new TRPCError({ code: "FORBIDDEN", message: "Admin access required." });
+  }
+  return next({
+    ctx: {
+      session: ctx.session,
+      user: ctx.user,
+    },
+  });
+});
 
 export const createCallerFactory = t.createCallerFactory;
 export const createTRPCRouter = t.router;
 export const publicProcedure = t.procedure;
 export const protectedProcedure = t.procedure.use(isAuthed);
+// Site-wide admin only — team management, SSO config, cross-team auditing.
+export const adminProcedure = t.procedure.use(isAuthed).use(isAdmin);

@@ -15,6 +15,15 @@ import {
 
 export const createTable = pgTableCreator((name) => `loadforge_${name}`);
 
+// A team lets colleagues see each other's tests/results without sharing a
+// login. Membership is one-team-per-user (users.team_id), which is enough
+// for "my team sees my runs" without building out a full multi-team model.
+export const teams = createTable("team", {
+  id: varchar("id").primaryKey(),
+  name: varchar("name", { length: 256 }).notNull(),
+  created_at: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
 export const users = createTable("user", {
   id: varchar("id").primaryKey(),
   name: varchar("name", { length: 256 }).notNull(),
@@ -22,6 +31,10 @@ export const users = createTable("user", {
   emailVerified: boolean("email_verified").default(false).notNull(),
   passwordHash: text("password_hash"),
   image: text("image"),
+  // Site-wide role. 'admin' sees every team's tests for overview/auditing;
+  // everyone else only sees their own + their team's.
+  role: varchar("role", { length: 32 }).default("tester").notNull(),
+  teamId: varchar("team_id").references(() => teams.id),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at")
     .defaultNow()
@@ -137,6 +150,9 @@ export const completeTests = createTable("load_test", {
   file_id: varchar("file_id", { length: 64 }), // matches backend's UUID file_id
   scenario_metrics: jsonb("scenario_metrics"), // full final-metrics blob from backend on scenario_completed
   status: varchar("status", { length: 50 }).default("pending").notNull(), // pending, running, completed, failed
+  // Snapshot of the creator's team at the time the test was started, so a
+  // test stays visible to that team even if the creator later changes teams.
+  team_id: varchar("team_id").references(() => teams.id),
   created_at: timestamp("created_at")
     .default(sql`CURRENT_TIMESTAMP`)
     .notNull(),
@@ -171,6 +187,42 @@ export const settings = createTable("setting", {
   key: varchar("key", { length: 256 }).notNull().unique(),
   value: text("value").notNull(),
   updatedAt: timestamp("updated_at")
+    .default(sql`CURRENT_TIMESTAMP`)
+    .notNull(),
+});
+
+// Audit trail of deployment sign-off decisions against a test result. A
+// test can collect more than one entry over time (e.g. a rejection followed
+// later by an approval after fixes), so this is append-only — never updated
+// or deleted — which is what makes it useful as an audit record.
+export const signOffs = createTable("sign_off", {
+  id: varchar("id").primaryKey(),
+  test_id: varchar("test_id")
+    .references(() => completeTests.id)
+    .notNull(),
+  user_id: varchar("user_id")
+    .references(() => users.id)
+    .notNull(),
+  decision: varchar("decision", { length: 32 }).notNull(), // 'approved' | 'approved_with_reservations' | 'rejected'
+  comment: text("comment"),
+  created_at: timestamp("created_at")
+    .default(sql`CURRENT_TIMESTAMP`)
+    .notNull(),
+});
+
+// A reusable target (base URL + optional auth headers) so a tester doesn't
+// have to retype the same URL/headers for every new test against the same
+// system. Scoped to a team when the creator has one, otherwise personal.
+export const environments = createTable("environment", {
+  id: varchar("id").primaryKey(),
+  user_id: varchar("user_id")
+    .references(() => users.id)
+    .notNull(),
+  team_id: varchar("team_id").references(() => teams.id),
+  name: varchar("name", { length: 256 }).notNull(),
+  base_url: varchar("base_url", { length: 2048 }).notNull(),
+  headers: jsonb("headers"), // e.g. { "Authorization": "Bearer ..." } — see note in access.ts
+  created_at: timestamp("created_at")
     .default(sql`CURRENT_TIMESTAMP`)
     .notNull(),
 });

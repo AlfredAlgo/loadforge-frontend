@@ -16,6 +16,8 @@ export const REPORT_COLORS = {
   redBg: [251, 234, 233] as RGB,
   amber: [156, 107, 20] as RGB,
   amberBg: [251, 241, 223] as RGB,
+  teal: [21, 101, 115] as RGB,
+  tealBg: [222, 240, 242] as RGB,
   grey: [140, 140, 140] as RGB,
 };
 
@@ -58,59 +60,77 @@ export function toPercent(value: number | null | undefined): number {
   return value > 0 && value <= 1 ? value * 100 : value;
 }
 
-export type Verdict = "healthy" | "degraded" | "failing" | "unknown";
+// Four tiers instead of a single 99%-or-fail bar — a run that's merely
+// "not perfect" shouldn't read the same as one that's actually broken.
+//   < 50%           → failing      — not acceptable
+//   50% – 69.9%     → acceptable   — acceptable for further testing, not for deployment
+//   70% – 84.9%     → fixable      — can deploy, but fixing issues first is recommended
+//   >= 85%          → healthy      — ready
+export type Verdict = "healthy" | "fixable" | "acceptable" | "failing" | "unknown";
 
 export function verdictFor(successRatePct: number, sampleCount: number): { verdict: Verdict; label: string } {
   if (!sampleCount) return { verdict: "unknown", label: "No data" };
-  if (successRatePct >= 99) return { verdict: "healthy", label: "Healthy" };
-  if (successRatePct >= 90) return { verdict: "degraded", label: "Degraded" };
-  return { verdict: "failing", label: "Failing" };
+  if (successRatePct >= 85) return { verdict: "healthy", label: "Ready" };
+  if (successRatePct >= 70) return { verdict: "fixable", label: "Deployable — fix recommended" };
+  if (successRatePct >= 50) return { verdict: "acceptable", label: "Acceptable — not recommended" };
+  return { verdict: "failing", label: "Not acceptable" };
 }
 
 export function verdictColor(v: Verdict): RGB {
   if (v === "healthy") return REPORT_COLORS.green;
-  if (v === "degraded") return REPORT_COLORS.amber;
+  if (v === "fixable") return REPORT_COLORS.amber;
+  if (v === "acceptable") return REPORT_COLORS.teal;
   if (v === "failing") return REPORT_COLORS.red;
   return REPORT_COLORS.grey;
 }
 
 export function verdictBg(v: Verdict): RGB {
   if (v === "healthy") return REPORT_COLORS.greenBg;
-  if (v === "degraded") return REPORT_COLORS.amberBg;
+  if (v === "fixable") return REPORT_COLORS.amberBg;
+  if (v === "acceptable") return REPORT_COLORS.tealBg;
   if (v === "failing") return REPORT_COLORS.redBg;
   return REPORT_COLORS.rowAlt;
 }
 
-export type ReadinessVerdict = "ready" | "reservations" | "not_ready";
+export type ReadinessVerdict = "ready" | "fixable" | "acceptable" | "not_ready";
 
 /**
  * A deployment-readiness call, derived only from this run's own numbers —
  * never a substitute for a human tester's judgment (risk likelihood,
  * business impact, etc.), just an honest read of what the metrics show.
+ * Mirrors the four tiers in verdictFor above, applied to the overall rate.
  */
 export function deploymentReadiness(
   overallSuccessRatePct: number,
   failingCount: number,
   degradedCount: number,
 ): { verdict: ReadinessVerdict; label: string; detail: string } {
-  if (failingCount === 0 && overallSuccessRatePct >= 99) {
+  if (overallSuccessRatePct >= 85) {
     return {
       verdict: "ready",
       label: "Ready for deployment",
-      detail: `Overall success rate was ${overallSuccessRatePct.toFixed(1)}%, and nothing fell into the Failing range in this run. No blocking issues were identified.`,
+      detail: `Overall success rate was ${overallSuccessRatePct.toFixed(1)}%, at or above the 85% deployment bar. No blocking issues were identified in this run.`,
     };
   }
-  if (failingCount === 0 && overallSuccessRatePct >= 90) {
+  if (overallSuccessRatePct >= 70) {
+    const shortfall = failingCount + degradedCount;
     return {
-      verdict: "reservations",
-      label: "Ready with reservations",
-      detail: `Overall success rate was ${overallSuccessRatePct.toFixed(1)}%. Nothing failed outright, but ${degradedCount} item${degradedCount === 1 ? "" : "s"} degraded below the 99% target — review before sign-off.`,
+      verdict: "fixable",
+      label: "Can deploy — fixes recommended",
+      detail: `Overall success rate was ${overallSuccessRatePct.toFixed(1)}%. This clears the 70% bar to deploy, but ${shortfall} item${shortfall === 1 ? "" : "s"} fell short of the 85% target — fixing these before go-live is recommended.`,
+    };
+  }
+  if (overallSuccessRatePct >= 50) {
+    return {
+      verdict: "acceptable",
+      label: "Acceptable — not recommended for deployment",
+      detail: `Overall success rate was ${overallSuccessRatePct.toFixed(1)}%. This is acceptable for further testing, but falls short of the 70% bar to deploy — deployment is not recommended until this improves.`,
     };
   }
   return {
     verdict: "not_ready",
     label: "Not ready — blocking issues found",
-    detail: `Overall success rate was ${overallSuccessRatePct.toFixed(1)}% with ${failingCount} failing item${failingCount === 1 ? "" : "s"} in this run. Resolve the issues below before this result can support a go-live decision.`,
+    detail: `Overall success rate was ${overallSuccessRatePct.toFixed(1)}%, below the 50% floor, with ${failingCount} failing item${failingCount === 1 ? "" : "s"} in this run. Resolve the issues below before this result can support a go-live decision.`,
   };
 }
 
@@ -122,7 +142,7 @@ export function readinessBanner(
   detail: string,
   y: number,
 ): number {
-  const v: Verdict = verdict === "ready" ? "healthy" : verdict === "reservations" ? "degraded" : "failing";
+  const v: Verdict = verdict === "ready" ? "healthy" : verdict === "fixable" ? "fixable" : verdict === "acceptable" ? "acceptable" : "failing";
   const { navy, charcoal } = REPORT_COLORS;
   const x = 14;
   const w = PAGE_W - 28;
@@ -150,6 +170,85 @@ export function readinessBanner(
 
   doc.setTextColor(...navy);
   return y + boxH + 8;
+}
+
+export interface SignOffEntry {
+  decision: "approved" | "approved_with_reservations" | "rejected";
+  comment: string | null;
+  createdAt: string;
+  userName: string;
+  userEmail: string;
+}
+
+function signOffDecisionLabel(decision: SignOffEntry["decision"]): string {
+  if (decision === "approved") return "Approved";
+  if (decision === "approved_with_reservations") return "Approved with reservations";
+  return "Rejected";
+}
+
+function signOffDecisionColor(decision: SignOffEntry["decision"]): RGB {
+  if (decision === "approved") return REPORT_COLORS.green;
+  if (decision === "approved_with_reservations") return REPORT_COLORS.amber;
+  return REPORT_COLORS.red;
+}
+
+/**
+ * Sign-off is the audit trail a government submission needs: who reviewed
+ * this result, their decision, and when — not just the system's own
+ * automated readiness verdict above it. Renders as part of the PDF so the
+ * record travels with the document, not just inside the app.
+ */
+export function signOffSection(doc: jsPDF, entries: SignOffEntry[], y: number): number {
+  const { charcoal, grey, rowAlt } = REPORT_COLORS;
+  sectionHeading(doc, "Sign-Off / Audit Trail", y);
+  let cursor = y + 9;
+
+  if (entries.length === 0) {
+    doc.setFont("helvetica", "italic");
+    doc.setFontSize(8.3);
+    doc.setTextColor(...grey);
+    doc.text("No sign-off has been recorded for this test yet.", 14, cursor);
+    doc.setTextColor(...charcoal);
+    return cursor + 6;
+  }
+
+  const x = 14;
+  const w = PAGE_W - 28;
+  for (const entry of entries) {
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(8);
+    const wrapped = entry.comment ? (doc.splitTextToSize(entry.comment, w - 10) as string[]) : [];
+    const boxH = 12 + wrapped.length * 4;
+
+    doc.setFillColor(...rowAlt);
+    doc.setDrawColor(...signOffDecisionColor(entry.decision));
+    doc.setLineWidth(0.5);
+    doc.roundedRect(x, cursor, w, boxH, 1.5, 1.5, "FD");
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(8.3);
+    doc.setTextColor(...signOffDecisionColor(entry.decision));
+    doc.text(signOffDecisionLabel(entry.decision), x + 4, cursor + 6);
+
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(7.5);
+    doc.setTextColor(...grey);
+    doc.text(
+      `${entry.userName} (${entry.userEmail}) — ${new Date(entry.createdAt).toLocaleString()}`,
+      x + w - 4,
+      cursor + 6,
+      { align: "right" },
+    );
+
+    if (wrapped.length > 0) {
+      doc.setTextColor(...charcoal);
+      doc.text(wrapped, x + 4, cursor + 11);
+    }
+
+    cursor += boxH + 3;
+  }
+  doc.setTextColor(...charcoal);
+  return cursor + 4;
 }
 
 /**
@@ -241,6 +340,19 @@ export function sectionHeading(doc: jsPDF, text: string, y: number) {
   doc.setLineWidth(0.6);
   doc.line(14, y + 1.5, PAGE_W - 14, y + 1.5);
   doc.setTextColor(...charcoal);
+}
+
+/** A heading + wrapped prose paragraph — plain report text, as opposed to
+ *  narrativeBox's bordered callout. Returns the Y position after the block. */
+export function textBlock(doc: jsPDF, title: string, paragraph: string, y: number): number {
+  const { charcoal } = REPORT_COLORS;
+  sectionHeading(doc, title, y);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8.5);
+  doc.setTextColor(...charcoal);
+  const wrapped = doc.splitTextToSize(paragraph, PAGE_W - 28) as string[];
+  doc.text(wrapped, 14, y + 7);
+  return y + 7 + wrapped.length * 4.3 + 6;
 }
 
 export function pageBand(doc: jsPDF, title: string) {

@@ -10,14 +10,17 @@ import {
 } from "~/components/ui/card";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
-import { AlertCircle, CheckCircle2, FileDown } from "lucide-react";
+import { AlertCircle, CheckCircle2, FileDown, Sheet } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from "recharts";
 import { gautengLogoB64 } from "~/lib/gauteng-logo-b64";
+import { api } from "~/trpc/react";
+import { SignOffPanel } from "~/components/sign-off-panel";
+import { downloadCsv, toCsv } from "~/lib/csv-export";
 import {
   REPORT_COLORS, addChart, captureChart, deploymentReadiness, drawFooter, narrativeBox,
-  pageBand, pickPercentile, readinessBanner, sectionHeading, suggestFix, toPercent,
+  pageBand, pickPercentile, readinessBanner, sectionHeading, signOffSection, suggestFix, textBlock, toPercent,
   verdictCellStyler, verdictFor,
 } from "~/lib/pdf-report";
 import type {
@@ -107,6 +110,79 @@ function buildNarrative(
   return { right, wrong };
 }
 
+/** Submission-grade reports need prose context up front, not just tables —
+ *  mirrors buildExecutiveSummary/buildTestScope/buildRecommendations in
+ *  test-results.tsx so both PDF reports read as one system. */
+function buildExecutiveSummary(
+  name: string,
+  modeLabel: string,
+  summary: ScenarioFinalMetrics["summary"],
+  stepEntries: [string, ScenarioLabelMetric][],
+): string {
+  const total = summary.total_samples ?? 0;
+  const successCount = summary.success_count ?? 0;
+  const rate = total > 0 ? (successCount / total) * 100 : 0;
+  const sentences: string[] = [];
+  sentences.push(
+    `This ${modeLabel.toLowerCase()} exercised ${name ? `"${name}"` : "the target system"}${stepEntries.length > 0 ? ` across ${stepEntries.length} step${stepEntries.length === 1 ? "" : "s"}` : ""}.`,
+  );
+  sentences.push(
+    `Of ${total.toLocaleString()} total sample${total === 1 ? "" : "s"} recorded, ${successCount.toLocaleString()} (${rate.toFixed(1)}%) completed successfully, at an average latency of ${ms(summary.avg_latency_ms)}.`,
+  );
+  const errorCount = summary.error_count ?? 0;
+  sentences.push(
+    errorCount > 0
+      ? `${errorCount.toLocaleString()} sample${errorCount === 1 ? "" : "s"} failed during the run — see the findings and the error breakdown later in this report for specifics and suggested fixes.`
+      : "No failed samples were recorded during the run.",
+  );
+  return sentences.join(" ");
+}
+
+function buildTestScope(
+  stepEntries: [string, ScenarioLabelMetric][],
+  summary: ScenarioFinalMetrics["summary"],
+): string {
+  const stepList = stepEntries.slice(0, 4).map(([label]) => label).join(", ") +
+    (stepEntries.length > 4 ? `, and ${stepEntries.length - 4} more` : "");
+  const duration = summary.duration_seconds;
+  const parts: string[] = [];
+  parts.push(
+    stepEntries.length > 0
+      ? `This run covered ${stepEntries.length} step${stepEntries.length === 1 ? "" : "s"}: ${stepList}.`
+      : "This run covered the step(s) configured for the test.",
+  );
+  if (duration) {
+    parts.push(`It ran for an approximate duration of ${duration.toFixed(1)}s, at a throughput of ${(summary.throughput_per_sec ?? 0).toFixed(1)} req/s.`);
+  }
+  return parts.join(" ");
+}
+
+function buildRecommendations(
+  readinessVerdict: ReturnType<typeof deploymentReadiness>["verdict"],
+  hasErrors: boolean,
+): string[] {
+  const recs: string[] = [];
+  recs.push(
+    readinessVerdict === "ready"
+      ? "No blocking issues were found in this run — proceed with confidence, and keep an eye on these steps under real usage after release."
+      : "Review the failing/degraded steps in this report, apply the suggested fixes, and re-run this test before sign-off.",
+  );
+  if (hasErrors) {
+    recs.push('See the "Suggested Fix" column on the error-detail pages for guidance specific to the failures recorded in this run.');
+  }
+  recs.push("Re-test after any change to the target environment, configuration, or deployed code — these results reflect a single point in time.");
+  return recs;
+}
+
+/** Tailwind classes for the four deployment-readiness tiers — mirrors the
+ *  colors verdictColor() uses in the PDF so on-screen and on-paper agree. */
+function readinessBadgeClass(verdict: ReturnType<typeof deploymentReadiness>["verdict"]): string {
+  if (verdict === "ready") return "bg-green-100 text-green-700 hover:bg-green-200";
+  if (verdict === "fixable") return "bg-amber-100 text-amber-700 hover:bg-amber-200";
+  if (verdict === "acceptable") return "bg-teal-100 text-teal-700 hover:bg-teal-200";
+  return "bg-red-100 text-red-700 hover:bg-red-200";
+}
+
 export function ScenarioResultsView({
   testId,
   name,
@@ -131,6 +207,23 @@ export function ScenarioResultsView({
   const stepEntries = Object.entries(perLabel);
   const stepsWithErrors = stepEntries.filter(([, m]) => m.errors && m.errors.length > 0);
   const isSuccess = toPercent(summary.error_rate ?? 0) === 0;
+
+  // Deployment readiness tiers (50 / 70 / 85) — computed once here so the
+  // on-screen badge and the PDF's readiness banner always agree.
+  const failingSteps = stepEntries.filter(([, m]) => verdictFor(stepSuccessRate(m), m.total_requests ?? 0).verdict === "failing").length;
+  const degradedSteps = stepEntries.filter(([, m]) => {
+    const v = verdictFor(stepSuccessRate(m), m.total_requests ?? 0).verdict;
+    return v === "fixable" || v === "acceptable";
+  }).length;
+  const overallSuccessPct = 100 - toPercent(summary.error_rate ?? 0);
+  const readiness = deploymentReadiness(overallSuccessPct, failingSteps, degradedSteps);
+
+  // Shared with the on-screen sign-off panel below — the PDF export reuses
+  // this same data instead of a second round trip.
+  const { data: signOffs } = api.signoff.list.useQuery(
+    { testId: testId ?? "" },
+    { enabled: !!testId },
+  );
 
   const p50 = summaryPercentile(summary, 50);
   const p95 = summaryPercentile(summary, 95);
@@ -194,10 +287,18 @@ export function ScenarioResultsView({
         143, 40, { align: "center" },
       );
 
-      sectionHeading(doc, "Test Overview", 53);
+      // Executive Summary + Test Scope — prose context before the numbers
+      const execSummary = buildExecutiveSummary(name, modeLabel, summary, stepEntries);
+      const testScope = buildTestScope(stepEntries, summary);
+      const afterExecSummary = textBlock(doc, "Executive Summary", execSummary, 53);
+      textBlock(doc, "Test Scope", testScope, afterExecSummary);
+
+      // ════════════════════════ PAGE 2 — TEST OVERVIEW + NARRATIVE ══════════
+      doc.addPage();
+      pageBand(doc, "Test Overview");
 
       autoTable(doc, {
-        startY: 57,
+        startY: 19,
         head: [["Metric", "Value"]],
         body: [
           ["Test Name", name || "—"],
@@ -217,7 +318,7 @@ export function ScenarioResultsView({
       });
 
       autoTable(doc, {
-        startY: 57,
+        startY: 19,
         head: [["Percentile", "Time (ms)"]],
         body: hasPercentiles
           ? [
@@ -236,19 +337,27 @@ export function ScenarioResultsView({
 
       const afterTables = (doc as any).lastAutoTable.finalY + 8;
       const afterNarrative = narrativeBox(doc, "What went right", narrative.right, afterTables, REPORT_COLORS.green);
-      const afterNarrative2 = narrativeBox(doc, "What went wrong", narrative.wrong, afterNarrative, REPORT_COLORS.red);
+      narrativeBox(doc, "What went wrong", narrative.wrong, afterNarrative, REPORT_COLORS.red);
 
-      // Deployment readiness — an honest read of this run's own numbers, not
-      // a substitute for a human reviewer's judgment call.
-      const failingSteps = stepEntries.filter(([, m]) => verdictFor(stepSuccessRate(m), m.total_requests ?? 0).verdict === "failing").length;
-      const degradedSteps = stepEntries.filter(([, m]) => verdictFor(stepSuccessRate(m), m.total_requests ?? 0).verdict === "degraded").length;
-      const overallSuccessPct = 100 - toPercent(summary.error_rate ?? 0);
-      const readiness = deploymentReadiness(overallSuccessPct, failingSteps, degradedSteps);
-      const afterReadiness = readinessBanner(doc, readiness.verdict, readiness.label, readiness.detail, afterNarrative2);
+      // ═══════════ PAGE 3 — DEPLOYMENT READINESS + RECOMMENDATIONS ══════════
+      doc.addPage();
+      pageBand(doc, "Deployment Readiness & Recommendations");
 
-      addChart(doc, avgTimeImg, 14, afterReadiness, 182, 58, "Average Response Time per Step (ms)");
+      // Deployment readiness was already computed above (component scope) so
+      // the on-screen badge and this PDF banner always agree.
+      const afterReadiness = readinessBanner(doc, readiness.verdict, readiness.label, readiness.detail, 19);
 
-      // ════════════════════════ PAGE 2 — PER-STEP BREAKDOWN ═════════════════
+      const recommendations = buildRecommendations(readiness.verdict, (summary.error_count ?? 0) > 0);
+      const afterRecommendations = narrativeBox(doc, "Recommendations", recommendations, afterReadiness + 4, REPORT_COLORS.navy);
+
+      addChart(doc, avgTimeImg, 14, afterRecommendations + 4, 182, 58, "Average Response Time per Step (ms)");
+
+      // ══════════════════════ PAGE 4 — SIGN-OFF / AUDIT TRAIL ════════════════
+      doc.addPage();
+      pageBand(doc, "Sign-Off / Audit Trail");
+      signOffSection(doc, signOffs ?? [], 19);
+
+      // ════════════════════════ PAGE 5 — PER-STEP BREAKDOWN ═════════════════
       doc.addPage();
       pageBand(doc, "Per-Step Breakdown");
       doc.setFontSize(7.5);
@@ -293,7 +402,7 @@ export function ScenarioResultsView({
         addChart(doc, errorsImg, 112, chartTop, 84, 55, "Errors per Step");
       }
 
-      // ═══════════════════════ PAGE 3 — ERROR DETAILS ═══════════════════════
+      // ═══════════════════════ PAGE 6 — ERROR DETAILS ═══════════════════════
       if (stepsWithErrors.length > 0) {
         doc.addPage();
         pageBand(doc, "Error Details by Step");
@@ -331,6 +440,37 @@ export function ScenarioResultsView({
     }
   };
 
+  // ─── Raw data export (CSV, Excel-compatible) ───────────────────────────
+  const exportToCSV = () => {
+    const stepRows = stepEntries.map(([label, m]) => ({
+      Step: label,
+      Samples: m.total_requests ?? 0,
+      "Success Rate (%)": stepSuccessRate(m).toFixed(1),
+      "Avg (ms)": m.average_time !== null ? Math.round(m.average_time) : "",
+      "P95 (ms)": (() => { const p = stepPercentile(m, 95); return p !== null ? Math.round(p) : ""; })(),
+      Errors: m.errors?.reduce((sum, e) => sum + e.count, 0) ?? 0,
+      Status: verdictFor(stepSuccessRate(m), m.total_requests ?? 0).label,
+    }));
+    const summaryRows = [{
+      "Test ID": testId ?? "N/A",
+      "Test Name": name || "—",
+      Mode: mode ?? "—",
+      "Total Samples": summary.total_samples ?? 0,
+      "Successful Samples": summary.success_count ?? 0,
+      "Failed Samples": summary.error_count ?? 0,
+      "Error Rate (%)": pct(summary.error_rate),
+      "Throughput (req/s)": (summary.throughput_per_sec ?? 0).toFixed(1),
+      "Duration (s)": (summary.duration_seconds ?? 0).toFixed(1),
+      "Deployment Readiness": readiness.label,
+    }];
+    const sections = [
+      ["=== TEST SUMMARY ===", toCsv(summaryRows)],
+      ["=== PER-STEP BREAKDOWN ===", stepRows.length ? toCsv(stepRows) : "No step data"],
+    ];
+    const csv = sections.map(([heading, body]) => `${heading}\n${body}`).join("\n\n");
+    downloadCsv(`functional-test-report-${(testId ?? "export").slice(0, 8)}.csv`, csv);
+  };
+
   return (
     <main className="mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
       <div className="mb-6 flex items-center justify-between">
@@ -339,6 +479,14 @@ export function ScenarioResultsView({
           <p className="mt-1 text-sm text-gray-600">Final metrics for this scenario run.</p>
         </div>
         <div className="flex items-center gap-3">
+          <Button
+            onClick={exportToCSV}
+            variant="outline"
+            className="border-gray-200 text-gray-600 hover:bg-gray-50 hover:text-gray-700"
+          >
+            <Sheet className="mr-2 h-4 w-4" />
+            Export CSV
+          </Button>
           <Button
             onClick={exportToPDF}
             disabled={exporting}
@@ -349,8 +497,12 @@ export function ScenarioResultsView({
             {exporting ? "Exporting…" : "Export PDF"}
           </Button>
           {mode && <Badge variant="outline">{mode}</Badge>}
-          <Badge>{status}</Badge>
+          <Badge className={readinessBadgeClass(readiness.verdict)}>{readiness.label}</Badge>
         </div>
+      </div>
+
+      <div className="mb-6">
+        <SignOffPanel testId={testId} signOffs={signOffs ?? []} />
       </div>
 
       <Card className="mb-6">
@@ -404,7 +556,10 @@ export function ScenarioResultsView({
                   const { verdict, label: verdictLabel } = verdictFor(rate, m.total_requests ?? 0);
                   const p95Step = stepPercentile(m, 95);
                   const verdictClass =
-                    verdict === "healthy" ? "text-green-600" : verdict === "degraded" ? "text-amber-600" : verdict === "failing" ? "text-red-600" : "text-gray-400";
+                    verdict === "healthy" ? "text-green-600" :
+                    verdict === "fixable" ? "text-amber-600" :
+                    verdict === "acceptable" ? "text-teal-600" :
+                    verdict === "failing" ? "text-red-600" : "text-gray-400";
                   return (
                     <tr key={label} className="border-b last:border-0">
                       <td className="py-2 pr-4 font-mono text-xs">{label}</td>

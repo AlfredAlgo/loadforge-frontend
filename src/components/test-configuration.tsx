@@ -88,8 +88,23 @@ export function TestConfiguration() {
     },
   });
 
+  const { data: savedEnvironments } = api.environments.list.useQuery();
+
   const addUrl = () => {
     setUrls([...urls, { id: Date.now(), url: "" }]);
+  };
+
+  const addUrlFromEnvironment = (baseUrl: string) => {
+    // Fill the first still-empty URL field if there is one, otherwise
+    // append a new one — avoids leaving a stray blank row when the form
+    // is untouched.
+    setUrls((prev) => {
+      const emptyIndex = prev.findIndex((u) => !u.url.trim());
+      if (emptyIndex !== -1) {
+        return prev.map((u, i) => (i === emptyIndex ? { ...u, url: baseUrl } : u));
+      }
+      return [...prev, { id: Date.now(), url: baseUrl }];
+    });
   };
 
   const removeUrl = (id: number) => {
@@ -595,6 +610,24 @@ export function TestConfiguration() {
                 )}
               </div>
             ))}
+            {savedEnvironments && savedEnvironments.length > 0 && (
+              <div className="flex items-center gap-2">
+                <Label className="shrink-0 text-xs text-gray-500">Load from saved environment</Label>
+                <Select onValueChange={(v) => {
+                  const env = savedEnvironments.find((e) => e.id === v);
+                  if (env) addUrlFromEnvironment(env.baseUrl);
+                }}>
+                  <SelectTrigger className="h-8 w-56 border-gray-300 text-xs">
+                    <SelectValue placeholder="Choose an environment…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {savedEnvironments.map((env) => (
+                      <SelectItem key={env.id} value={env.id}>{env.name} — {env.baseUrl}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
             <div className="flex gap-2">
               <Button
                 onClick={addUrl}

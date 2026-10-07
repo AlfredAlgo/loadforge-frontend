@@ -6,10 +6,11 @@ import { z } from "zod";
 import { completeTests, testPhases, testResults } from "../../db/schema";
 import { v4 as uuidv4 } from "uuid";
 import { eq, inArray, and } from "drizzle-orm";
+import { testVisibilityWhere, canViewTest } from "../access";
 
 export const testsRouter = createTRPCRouter({
   getRunningTests: protectedProcedure.query(async ({ ctx }) => {
-    const userId = ctx.user.id
+    const visibility = testVisibilityWhere(ctx.user)
     const tests = await ctx.db
       .select({
         id: completeTests.id,
@@ -21,10 +22,10 @@ export const testsRouter = createTRPCRouter({
       .where(
         and(
           eq(completeTests.status, "running"),
-          eq(completeTests.user_id, userId),
           // URL/CSV ramp tests only. Scenario rows have their own page
           // and their own /live/scenario bootstrap query.
           eq(completeTests.type, "url"),
+          ...(visibility ? [visibility] : []),
         ),
       )
       .limit(50);
@@ -100,6 +101,7 @@ export const testsRouter = createTRPCRouter({
           ramp_up_time: input.ramp_up_time,
           ramp_down_time: input.ramp_down_time,
           status: "running",
+          team_id: ctx.user.teamId,
         });
 
         socket.emit("start_test", {
@@ -159,6 +161,7 @@ export const testsRouter = createTRPCRouter({
           file_id: input.file_id,
           jmx_filename: input.jmx_filename ?? null,
           status: "running",
+          team_id: ctx.user.teamId,
         });
 
         socket.emit("start_scenario", {
@@ -182,6 +185,7 @@ export const testsRouter = createTRPCRouter({
       }
     }),
   getRunningScenarios: protectedProcedure.query(async ({ ctx }) => {
+    const visibility = testVisibilityWhere(ctx.user)
     const rows = await ctx.db
       .select({
         id: completeTests.id,
@@ -195,7 +199,7 @@ export const testsRouter = createTRPCRouter({
         and(
           eq(completeTests.type, "scenario"),
           eq(completeTests.status, "running"),
-          eq(completeTests.user_id, ctx.user.id),
+          ...(visibility ? [visibility] : []),
         ),
       )
       .limit(50);
@@ -219,15 +223,13 @@ export const testsRouter = createTRPCRouter({
           scenario_metrics: completeTests.scenario_metrics,
           created_at: completeTests.created_at,
           completed_at: completeTests.completed_at,
+          user_id: completeTests.user_id,
+          team_id: completeTests.team_id,
         })
         .from(completeTests)
-        .where(
-          and(
-            eq(completeTests.id, input.testId),
-            eq(completeTests.user_id, ctx.user.id),
-          ),
-        )
+        .where(eq(completeTests.id, input.testId))
         .limit(1);
+      if (!canViewTest(ctx.user, row[0])) return null;
       return row[0] ?? null;
     }),
   onProgress: publicProcedure.subscription(async function* (opts) {

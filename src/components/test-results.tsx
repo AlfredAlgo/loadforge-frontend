@@ -8,11 +8,14 @@ import {
   LineChart, Line, BarChart, Bar,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from "recharts"
-import { CheckCircle2, Clock, TrendingUp, AlertCircle, ChevronDown, FileDown } from "lucide-react"
+import { CheckCircle2, Clock, TrendingUp, AlertCircle, ChevronDown, FileDown, Sheet } from "lucide-react"
 import { gautengLogoB64 } from "~/lib/gauteng-logo-b64"
+import { api } from "~/trpc/react"
+import { SignOffPanel } from "~/components/sign-off-panel"
+import { downloadCsv, toCsv } from "~/lib/csv-export"
 import {
   REPORT_COLORS, addChart, captureChart, deploymentReadiness, drawFooter, narrativeBox,
-  pageBand, readinessBanner, sectionHeading, suggestFix, verdictCellStyler, verdictFor,
+  pageBand, readinessBanner, sectionHeading, signOffSection, suggestFix, textBlock, verdictCellStyler, verdictFor,
 } from "~/lib/pdf-report"
 
 interface TestResultsProps {
@@ -115,6 +118,94 @@ function buildLoadNarrative(
   return { right, wrong }
 }
 
+/** A short prose paragraph opening the report — what was tested and the
+ *  headline outcome, so a reader can understand the result without first
+ *  parsing every table. */
+function buildExecutiveSummary(results: TestResultsProps["results"], phases: TestResultsProps["phases"]): string {
+  const rate = results.totalRequests ? (results.successfulRequests / results.totalRequests) * 100 : 0
+  const peakConcurrency = phases.length > 0 ? Math.max(...phases.map(p => p.concurrency)) : null
+  const sentences: string[] = []
+
+  sentences.push(
+    `This performance test exercised the target system${phases.length > 0 ? ` across ${phases.length} load phase${phases.length === 1 ? '' : 's'}` : ''}` +
+    `${peakConcurrency !== null ? `, ramping up to a peak of ${peakConcurrency} concurrent user${peakConcurrency === 1 ? '' : 's'}` : ''}.`,
+  )
+  sentences.push(
+    `Of ${results.totalRequests.toLocaleString()} total request${results.totalRequests === 1 ? '' : 's'} sent, ${results.successfulRequests.toLocaleString()} ` +
+    `(${rate.toFixed(1)}%) completed successfully, at an average response time of ${results.avgResponseTime}ms ` +
+    `(P95: ${results.p95ResponseTime}ms, P99: ${results.p99ResponseTime}ms).`,
+  )
+  sentences.push(
+    results.failedRequests > 0
+      ? `${results.failedRequests.toLocaleString()} request${results.failedRequests === 1 ? '' : 's'} failed during the run — see the findings and the error breakdown later in this report for specifics and suggested fixes.`
+      : `No failed requests were recorded during the run.`,
+  )
+
+  return sentences.join(' ')
+}
+
+/** Describes what was actually tested, in prose — the config a reader would
+ *  otherwise have to reconstruct from the tables further down. */
+function buildTestScope(results: TestResultsProps["results"], phases: TestResultsProps["phases"]): string {
+  const urls = Object.keys(results.urlBreakdown ?? {})
+  const urlList = urls.slice(0, 4).join(', ') + (urls.length > 4 ? `, and ${urls.length - 4} more` : '')
+  const concurrencyProgression = phases.map(p => p.concurrency).join(' → ')
+  const approxDurationSec = results.requestsPerSecond > 0 ? Math.round(results.totalRequests / results.requestsPerSecond) : null
+
+  const parts: string[] = []
+  parts.push(
+    urls.length > 0
+      ? `This test targeted ${urls.length} endpoint${urls.length === 1 ? '' : 's'}: ${urlList}.`
+      : `This test targeted the endpoint(s) configured for the run.`,
+  )
+  if (phases.length > 0) {
+    parts.push(
+      `Concurrency was ramped through ${phases.length} phase${phases.length === 1 ? '' : 's'} (${concurrencyProgression} concurrent user${phases.length === 1 && phases[0]!.concurrency === 1 ? '' : 's'})` +
+      `${approxDurationSec ? `, over an approximate total duration of ${approxDurationSec}s` : ''}.`,
+    )
+  }
+  return parts.join(' ')
+}
+
+/** Concrete next steps, not generic filler — tied to this run's own verdict
+ *  and whether there's anything to actually act on. */
+function buildRecommendations(
+  readinessVerdict: ReturnType<typeof deploymentReadiness>['verdict'],
+  hasErrors: boolean,
+): string[] {
+  const recs: string[] = []
+  recs.push(
+    readinessVerdict === 'ready'
+      ? 'No blocking issues were found in this run — proceed with confidence, and keep an eye on these endpoints under real traffic after release.'
+      : 'Review the failing/degraded phases and endpoints in this report, apply the suggested fixes, and re-run this test before sign-off.',
+  )
+  if (hasErrors) {
+    recs.push('See the "Suggested Fix" column on the error-detail pages for guidance specific to the failures recorded in this run.')
+  }
+  recs.push('Re-test after any change to the target environment, configuration, or deployed code — these results reflect a single point in time.')
+  return recs
+}
+
+/** Tailwind classes for the four deployment-readiness tiers — mirrors the
+ *  colors verdictColor() uses in the PDF so on-screen and on-paper agree. */
+function readinessBadgeClass(verdict: ReturnType<typeof deploymentReadiness>['verdict']): string {
+  if (verdict === 'ready') return 'bg-green-100 text-green-700 hover:bg-green-200'
+  if (verdict === 'fixable') return 'bg-amber-100 text-amber-700 hover:bg-amber-200'
+  if (verdict === 'acceptable') return 'bg-teal-100 text-teal-700 hover:bg-teal-200'
+  return 'bg-red-100 text-red-700 hover:bg-red-200'
+}
+
+/** Same four tiers, applied to a single rate/sample pair (a phase or a
+ *  URL row) rather than the overall run. */
+function rateBadgeClass(rate: number, samples: number): string {
+  const { verdict } = verdictFor(rate, samples)
+  if (verdict === 'healthy') return 'bg-green-100 text-green-700 hover:bg-green-200'
+  if (verdict === 'fixable') return 'bg-amber-100 text-amber-700 hover:bg-amber-200'
+  if (verdict === 'acceptable') return 'bg-teal-100 text-teal-700 hover:bg-teal-200'
+  if (verdict === 'failing') return 'bg-red-100 text-red-700 hover:bg-red-200'
+  return 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+}
+
 export const TestResults: React.FC<TestResultsProps> = ({ results, phases }) => {
   const [activeMetric, setActiveMetric] = useState<string | null>(null)
   const [expandedUrls, setExpandedUrls]  = useState<Set<string>>(new Set())
@@ -129,7 +220,24 @@ export const TestResults: React.FC<TestResultsProps> = ({ results, phases }) => 
   const overallSuccessRate = results.totalRequests
     ? (results.successfulRequests / results.totalRequests) * 100
     : 0
-  const isSuccess = overallSuccessRate >= 99
+  // Deployment readiness tiers (50 / 70 / 85), not a single 99%-or-fail
+  // bar — computed once here so the on-screen badge, the cover page, and
+  // the PDF's readiness banner all agree with each other.
+  const failingPhases = phases.filter(p => verdictFor(p.successRate, p.requests).verdict === 'failing').length
+  const degradedPhases = phases.filter(p => {
+    const v = verdictFor(p.successRate, p.requests).verdict
+    return v === 'fixable' || v === 'acceptable'
+  }).length
+  const readiness = deploymentReadiness(overallSuccessRate, failingPhases, degradedPhases)
+  const isSuccess = readiness.verdict === 'ready'
+
+  // Shared with the on-screen sign-off panel below — fetched once here so
+  // the PDF export can include the same audit trail without a second round
+  // trip, and refetched automatically whenever a teammate adds an entry.
+  const { data: signOffs } = api.signoff.list.useQuery(
+    { testId: results.testId ?? '' },
+    { enabled: !!results.testId },
+  )
 
   const toggleUrl = (url: string) => {
     setExpandedUrls(prev => {
@@ -208,11 +316,22 @@ export const TestResults: React.FC<TestResultsProps> = ({ results, phases }) => 
         143, 40, { align: 'center' }
       )
 
-      // Overview + Percentiles tables (side by side)
-      sectionHeading(doc, 'Test Overview', 53)
+      // Executive Summary + Test Scope — submission-grade reports need prose
+      // context before the numbers, not just tables and charts.
+      const execSummary = buildExecutiveSummary(results, phases)
+      const testScope = buildTestScope(results, phases)
+      const afterExecSummary = textBlock(doc, 'Executive Summary', execSummary, 53)
+      textBlock(doc, 'Test Scope', testScope, afterExecSummary)
+
+      // ══════════════════════════════════════════════════════════════════════
+      // PAGE 2 — TEST OVERVIEW + NARRATIVE
+      // ══════════════════════════════════════════════════════════════════════
+
+      doc.addPage()
+      pageBand(doc, 'Test Overview')
 
       autoTable(doc, {
-        startY: 57,
+        startY: 19,
         head: [['Metric', 'Value']],
         body: [
           ['Total Requests',      results.totalRequests.toLocaleString()],
@@ -231,7 +350,7 @@ export const TestResults: React.FC<TestResultsProps> = ({ results, phases }) => 
       })
 
       autoTable(doc, {
-        startY: 57,
+        startY: 19,
         head: [['Percentile', 'Time (ms)']],
         body: [
           ['Minimum',      `${results.minResponseTime} ms`],
@@ -249,20 +368,34 @@ export const TestResults: React.FC<TestResultsProps> = ({ results, phases }) => 
 
       // What went right / what went wrong — derived from the same metrics above
       const afterRight = narrativeBox(doc, 'What went right', narrative.right, (doc as any).lastAutoTable.finalY + 8, REPORT_COLORS.green)
-      const afterWrong = narrativeBox(doc, 'What went wrong', narrative.wrong, afterRight, REPORT_COLORS.red)
-
-      // Deployment readiness — an honest read of this run's own numbers, not
-      // a substitute for a human reviewer's judgment call.
-      const failingPhases = phases.filter(p => verdictFor(p.successRate, p.requests).verdict === 'failing').length
-      const degradedPhases = phases.filter(p => verdictFor(p.successRate, p.requests).verdict === 'degraded').length
-      const readiness = deploymentReadiness(overallSuccessRate, failingPhases, degradedPhases)
-      const afterReadiness = readinessBanner(doc, readiness.verdict, readiness.label, readiness.detail, afterWrong)
-
-      // Response time chart (full width, bottom of page 1)
-      addChart(doc, responseTimeImg, 14, afterReadiness, 182, 55, 'Response Time by Phase — P50 / P95 / P99 (ms)')
+      narrativeBox(doc, 'What went wrong', narrative.wrong, afterRight, REPORT_COLORS.red)
 
       // ══════════════════════════════════════════════════════════════════════
-      // PAGE 2 — PHASE BREAKDOWN + CHARTS
+      // PAGE 3 — DEPLOYMENT READINESS + RECOMMENDATIONS + RESPONSE TIME CHART
+      // ══════════════════════════════════════════════════════════════════════
+
+      doc.addPage()
+      pageBand(doc, 'Deployment Readiness & Recommendations')
+
+      // Deployment readiness was already computed above (component scope) so
+      // the on-screen badge and this PDF banner always agree.
+      const afterReadiness = readinessBanner(doc, readiness.verdict, readiness.label, readiness.detail, 19)
+
+      const recommendations = buildRecommendations(readiness.verdict, results.failedRequests > 0)
+      const afterRecommendations = narrativeBox(doc, 'Recommendations', recommendations, afterReadiness + 4, REPORT_COLORS.navy)
+
+      // Response time chart (full width)
+      addChart(doc, responseTimeImg, 14, afterRecommendations + 4, 182, 55, 'Response Time by Phase — P50 / P95 / P99 (ms)')
+
+      // ══════════════════════════════════════════════════════════════════════
+      // PAGE 4 — SIGN-OFF / AUDIT TRAIL
+      // ══════════════════════════════════════════════════════════════════════
+      doc.addPage()
+      pageBand(doc, 'Sign-Off / Audit Trail')
+      signOffSection(doc, signOffs ?? [], 19)
+
+      // ══════════════════════════════════════════════════════════════════════
+      // PAGE 5 — PHASE BREAKDOWN + CHARTS
       // ══════════════════════════════════════════════════════════════════════
 
       doc.addPage()
@@ -307,7 +440,7 @@ export const TestResults: React.FC<TestResultsProps> = ({ results, phases }) => 
       }
 
       // ══════════════════════════════════════════════════════════════════════
-      // PAGE 3 — URL BREAKDOWN
+      // PAGE 6 — URL BREAKDOWN
       // ══════════════════════════════════════════════════════════════════════
 
       const urlEntries = Object.entries(results.urlBreakdown ?? {})
@@ -378,6 +511,50 @@ export const TestResults: React.FC<TestResultsProps> = ({ results, phases }) => 
     }
   }
 
+  // ─── Raw data export (CSV, Excel-compatible) ───────────────────────────────
+  const exportToCSV = () => {
+    const phaseRows = phases.map(p => ({
+      Phase: p.phase,
+      Concurrency: p.concurrency,
+      Requests: p.requests,
+      Successful: p.successCount,
+      Errors: p.errorCount,
+      'Success Rate (%)': p.successRate.toFixed(1),
+      'P50 (ms)': p.percentiles.p50,
+      'P95 (ms)': p.percentiles.p95,
+      'P99 (ms)': p.percentiles.p99,
+      Status: verdictFor(p.successRate, p.requests).label,
+    }))
+    const urlRows = Object.entries(results.urlBreakdown ?? {}).map(([url, m]: [string, any]) => ({
+      URL: url,
+      Requests: m.requests ?? 0,
+      'Avg Response Time (ms)': m.avgResponseTime ?? 0,
+      'Success Rate (%)': Number(m.successRate ?? 0).toFixed(1),
+      Errors: (m.errors ?? []).reduce((s: number, e: any) => s + e.count, 0),
+    }))
+    const summaryRows = [{
+      'Test ID': results.testId ?? 'N/A',
+      'Total Requests': results.totalRequests,
+      'Successful Requests': results.successfulRequests,
+      'Failed Requests': results.failedRequests,
+      'Success Rate (%)': overallSuccessRate.toFixed(1),
+      'Avg Response Time (ms)': results.avgResponseTime,
+      'P50 (ms)': results.p50ResponseTime,
+      'P95 (ms)': results.p95ResponseTime,
+      'P99 (ms)': results.p99ResponseTime,
+      'Requests/Second': results.requestsPerSecond,
+      'Deployment Readiness': readiness.label,
+    }]
+
+    const sections = [
+      ['=== TEST SUMMARY ===', toCsv(summaryRows)],
+      ['=== PHASE BREAKDOWN ===', phaseRows.length ? toCsv(phaseRows) : 'No phase data'],
+      ['=== URL BREAKDOWN ===', urlRows.length ? toCsv(urlRows) : 'No URL data'],
+    ]
+    const csv = sections.map(([heading, body]) => `${heading}\n${body}`).join('\n\n')
+    downloadCsv(`performance-report-${(results.testId ?? 'export').slice(0, 8)}.csv`, csv)
+  }
+
   // ─── UI ─────────────────────────────────────────────────────────────────────
   const overviewMetrics = [
     { title: "Total Requests",    value: results.totalRequests.toLocaleString(), icon: TrendingUp,  color: "text-purple-600",  hoverBorder: "hover:border-purple-300" },
@@ -397,6 +574,14 @@ export const TestResults: React.FC<TestResultsProps> = ({ results, phases }) => 
           </div>
           <div className="flex items-center gap-3">
             <Button
+              onClick={exportToCSV}
+              variant="outline"
+              className="border-gray-200 text-gray-600 hover:bg-gray-50 hover:text-gray-700"
+            >
+              <Sheet className="mr-2 h-4 w-4" />
+              Export CSV
+            </Button>
+            <Button
               onClick={exportToPDF}
               disabled={exporting}
               variant="outline"
@@ -405,12 +590,16 @@ export const TestResults: React.FC<TestResultsProps> = ({ results, phases }) => 
               <FileDown className="mr-2 h-4 w-4" />
               {exporting ? "Exporting…" : "Export PDF"}
             </Button>
-            <Badge className={isSuccess ? "bg-green-100 text-green-700 hover:bg-green-200" : "bg-red-100 text-red-700 hover:bg-red-200"}>
+            <Badge className={readinessBadgeClass(readiness.verdict)}>
               {isSuccess ? <CheckCircle2 className="mr-1 h-3 w-3" /> : <AlertCircle className="mr-1 h-3 w-3" />}
-              {isSuccess ? "Success" : "Failed"}
+              {readiness.label}
             </Badge>
           </div>
         </div>
+      </div>
+
+      <div className="mb-8">
+        <SignOffPanel testId={results.testId} signOffs={signOffs ?? []} />
       </div>
 
       {/* Metric cards */}
@@ -625,10 +814,7 @@ export const TestResults: React.FC<TestResultsProps> = ({ results, phases }) => 
                 const successCount = Math.round((rate / 100) * totalReqs)
                 const errorCount  = totalReqs - successCount
 
-                const badgeClass =
-                  rate >= 99 ? "bg-green-100 text-green-700 hover:bg-green-200" :
-                  rate >= 50 ? "bg-yellow-100 text-yellow-700 hover:bg-yellow-200" :
-                               "bg-red-100 text-red-700 hover:bg-red-200"
+                const badgeClass = rateBadgeClass(rate, totalReqs)
 
                 return (
                   <div
