@@ -74,6 +74,114 @@ export function verdictColor(v: Verdict): RGB {
   return REPORT_COLORS.grey;
 }
 
+export function verdictBg(v: Verdict): RGB {
+  if (v === "healthy") return REPORT_COLORS.greenBg;
+  if (v === "degraded") return REPORT_COLORS.amberBg;
+  if (v === "failing") return REPORT_COLORS.redBg;
+  return REPORT_COLORS.rowAlt;
+}
+
+export type ReadinessVerdict = "ready" | "reservations" | "not_ready";
+
+/**
+ * A deployment-readiness call, derived only from this run's own numbers —
+ * never a substitute for a human tester's judgment (risk likelihood,
+ * business impact, etc.), just an honest read of what the metrics show.
+ */
+export function deploymentReadiness(
+  overallSuccessRatePct: number,
+  failingCount: number,
+  degradedCount: number,
+): { verdict: ReadinessVerdict; label: string; detail: string } {
+  if (failingCount === 0 && overallSuccessRatePct >= 99) {
+    return {
+      verdict: "ready",
+      label: "Ready for deployment",
+      detail: `Overall success rate was ${overallSuccessRatePct.toFixed(1)}%, and nothing fell into the Failing range in this run. No blocking issues were identified.`,
+    };
+  }
+  if (failingCount === 0 && overallSuccessRatePct >= 90) {
+    return {
+      verdict: "reservations",
+      label: "Ready with reservations",
+      detail: `Overall success rate was ${overallSuccessRatePct.toFixed(1)}%. Nothing failed outright, but ${degradedCount} item${degradedCount === 1 ? "" : "s"} degraded below the 99% target — review before sign-off.`,
+    };
+  }
+  return {
+    verdict: "not_ready",
+    label: "Not ready — blocking issues found",
+    detail: `Overall success rate was ${overallSuccessRatePct.toFixed(1)}% with ${failingCount} failing item${failingCount === 1 ? "" : "s"} in this run. Resolve the issues below before this result can support a go-live decision.`,
+  };
+}
+
+/** A prominent readiness banner — the PDF equivalent of a report's "Conclusion". */
+export function readinessBanner(
+  doc: jsPDF,
+  verdict: ReadinessVerdict,
+  label: string,
+  detail: string,
+  y: number,
+): number {
+  const v: Verdict = verdict === "ready" ? "healthy" : verdict === "reservations" ? "degraded" : "failing";
+  const { navy, charcoal } = REPORT_COLORS;
+  const x = 14;
+  const w = PAGE_W - 28;
+  const pad = 5;
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8.3);
+  const wrapped = doc.splitTextToSize(detail, w - pad * 2) as string[];
+  const boxH = 12 + wrapped.length * 4.3 + pad;
+
+  doc.setFillColor(...verdictBg(v));
+  doc.setDrawColor(...verdictColor(v));
+  doc.setLineWidth(0.6);
+  doc.roundedRect(x, y, w, boxH, 2, 2, "FD");
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(10.5);
+  doc.setTextColor(...verdictColor(v));
+  doc.text(label.toUpperCase(), x + pad, y + 7.5);
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8.3);
+  doc.setTextColor(...charcoal);
+  doc.text(wrapped, x + pad, y + 14);
+
+  doc.setTextColor(...navy);
+  return y + boxH + 8;
+}
+
+/**
+ * Rule-based remediation guidance keyed off the status code / message a
+ * failure actually carried — not a model guess, just a lookup over the same
+ * categories classifyBackendError already uses for live error display.
+ */
+export function suggestFix(statusCode: string | number, message: string | null | undefined): string {
+  const code = String(statusCode);
+  const text = (message ?? "").toLowerCase();
+
+  if (/^5\d{2}$/.test(code)) {
+    return "Server-side error — check the target's application logs and resource usage (CPU/memory/DB connections) around the time of these failures.";
+  }
+  if (code === "429" || text.includes("rate limit")) {
+    return "Rate-limited — confirm the test's request rate doesn't exceed the target's configured limits.";
+  }
+  if (/^4\d{2}$/.test(code)) {
+    return "Client-side error — verify the request payloads, auth tokens, and headers the test sends are still valid for this environment.";
+  }
+  if (text.includes("timeout") || text.includes("timed out")) {
+    return "Requests did not complete in time — investigate slow downstream dependencies, or increase target capacity before re-testing.";
+  }
+  if (text.includes("econnrefused") || (text.includes("connect") && !text.includes("connection established"))) {
+    return "Target was unreachable — confirm the service was running and the network path was correct for the full test duration.";
+  }
+  if (text.includes("enotfound") || text.includes("dns")) {
+    return "DNS resolution failed — confirm the hostname is correct and resolvable from the test environment.";
+  }
+  return "Review the target's server-side logs for the exact cause of this failure.";
+}
+
 // ── SVG → PNG capture, used to embed Recharts output as PDF images ─────────
 export function svgToPng(svgEl: SVGSVGElement): Promise<string> {
   return new Promise((resolve, reject) => {

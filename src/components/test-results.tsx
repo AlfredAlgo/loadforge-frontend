@@ -11,8 +11,8 @@ import {
 import { CheckCircle2, Clock, TrendingUp, AlertCircle, ChevronDown, FileDown } from "lucide-react"
 import { gautengLogoB64 } from "~/lib/gauteng-logo-b64"
 import {
-  REPORT_COLORS, addChart, captureChart, drawFooter, narrativeBox,
-  pageBand, sectionHeading, verdictCellStyler, verdictFor,
+  REPORT_COLORS, addChart, captureChart, deploymentReadiness, drawFooter, narrativeBox,
+  pageBand, readinessBanner, sectionHeading, suggestFix, verdictCellStyler, verdictFor,
 } from "~/lib/pdf-report"
 
 interface TestResultsProps {
@@ -251,8 +251,15 @@ export const TestResults: React.FC<TestResultsProps> = ({ results, phases }) => 
       const afterRight = narrativeBox(doc, 'What went right', narrative.right, (doc as any).lastAutoTable.finalY + 8, REPORT_COLORS.green)
       const afterWrong = narrativeBox(doc, 'What went wrong', narrative.wrong, afterRight, REPORT_COLORS.red)
 
+      // Deployment readiness — an honest read of this run's own numbers, not
+      // a substitute for a human reviewer's judgment call.
+      const failingPhases = phases.filter(p => verdictFor(p.successRate, p.requests).verdict === 'failing').length
+      const degradedPhases = phases.filter(p => verdictFor(p.successRate, p.requests).verdict === 'degraded').length
+      const readiness = deploymentReadiness(overallSuccessRate, failingPhases, degradedPhases)
+      const afterReadiness = readinessBanner(doc, readiness.verdict, readiness.label, readiness.detail, afterWrong)
+
       // Response time chart (full width, bottom of page 1)
-      addChart(doc, responseTimeImg, 14, afterWrong, 182, 55, 'Response Time by Phase — P50 / P95 / P99 (ms)')
+      addChart(doc, responseTimeImg, 14, afterReadiness, 182, 55, 'Response Time by Phase — P50 / P95 / P99 (ms)')
 
       // ══════════════════════════════════════════════════════════════════════
       // PAGE 2 — PHASE BREAKDOWN + CHARTS
@@ -260,10 +267,15 @@ export const TestResults: React.FC<TestResultsProps> = ({ results, phases }) => 
 
       doc.addPage()
       pageBand(doc, 'Phase Breakdown')
+      doc.setFontSize(7.5)
+      doc.setFont('helvetica', 'italic')
+      doc.setTextColor(...REPORT_COLORS.grey)
+      doc.text('Each phase is evaluated as a test case against a 99% success-rate target.', 14, 16)
+      doc.setTextColor(...charcoal)
 
       if (phases.length > 0) {
         autoTable(doc, {
-          startY: 17,
+          startY: 19,
           head: [['Phase', 'Concurrency', 'Requests', 'Success', 'Errors', 'Success Rate', 'P50', 'P95', 'P99', 'Status']],
           body: phases.map(p => [
             `Phase ${p.phase}`, p.concurrency, p.requests, p.successCount, p.errorCount,
@@ -282,7 +294,7 @@ export const TestResults: React.FC<TestResultsProps> = ({ results, phases }) => 
         })
       }
 
-      const chartTop = phases.length > 0 ? (doc as any).lastAutoTable.finalY + 10 : 20
+      const chartTop = phases.length > 0 ? (doc as any).lastAutoTable.finalY + 10 : 22
 
       // Row 1: Requests (left) + Success Rate (right)
       addChart(doc, requestsImg,   14,  chartTop,      90, 55, 'Total Requests per Phase')
@@ -346,11 +358,12 @@ export const TestResults: React.FC<TestResultsProps> = ({ results, phases }) => 
             y += 4
             autoTable(doc, {
               startY: y,
-              head: [['Status Code', 'Error Message', 'Count']],
-              body: (m as any).errors.map((e: any) => [e.statusCode, e.message, e.count]),
+              head: [['Status Code', 'Error Message', 'Count', 'Suggested Fix']],
+              body: (m as any).errors.map((e: any) => [e.statusCode, e.message, e.count, suggestFix(e.statusCode, e.message)]),
               headStyles: { fillColor: [80,80,80] as [number,number,number], textColor: white, fontSize: 7.5 },
-              bodyStyles: { fontSize: 7.5, textColor: charcoal },
+              bodyStyles: { fontSize: 7, textColor: charcoal },
               alternateRowStyles: { fillColor: rowAlt },
+              columnStyles: { 1: { cellWidth: 55 }, 3: { cellWidth: 65 } },
               margin: { left: 14, right: 14 },
             })
             y = (doc as any).lastAutoTable.finalY + 8

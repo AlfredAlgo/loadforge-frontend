@@ -13,42 +13,68 @@ const MIN_READABLE_CHARS = 20;
 const DOCX_MIME =
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
-// Other field labels from the standard Gauteng BRS/SRS template — if one of
-// these shows up where a title's value should be, the table's cells almost
+// Other field labels seen across Gauteng BRS/SRS templates — if one of these
+// shows up where a title's value should be, the table's cells almost
 // certainly extracted out of row order, so treat it as "not found" rather
-// than mistaking a neighboring label for the title.
+// than mistaking a neighboring label (or a bare "Title"/"Project" label
+// itself, e.g. "Project Manager") for the title.
 const KNOWN_LABEL_RE =
-  /^(system\s*id|date\s*prepared|requested\s*by|date\s*required|new\s*functionality|impacted\s*stakeholders|purpose|root\s*cause|current\s*process|requirement|additional\s*requirement|target\s*outcome|comments|impact\s*level|priority\s*level|approval|role|name|signature|date)\b/i;
+  /^(system\s*id|date\s*prepared|requested\s*by|date\s*required|new\s*functionality|impacted\s*stakeholders|purpose|root\s*cause|current\s*process|requirement|additional\s*requirement|target\s*outcome|comments|impact\s*level|priority\s*level|approval|role|name|signature|date|title|project)\b/i;
+
+// Boilerplate seen on cover pages / headers across templates — never the
+// system's name, even though it's often the very first readable text.
+const BOILERPLATE_LINE_RE =
+  /^(gauteng province|republic of south africa|e-government|e-govermment|unity in diversity|business\/?system requirements? specification|business requirement specification|department of [a-z ]+|page \d+ of \d+|rfc call number|date:|author:|functional unit:|prepared (for|by)|version:|requirement type:|change type:|brs\s|document (control|history|version control)|docusign envelope id)/i;
+
+// Labels this project's title can appear under — different departments use
+// different templates (see the real BRS samples this was built against).
+const NAME_LABELS = ["title", "project"] as const;
 
 function looksLikeUsableTitle(value: string | undefined): value is string {
   return !!value && /[a-z0-9]/i.test(value) && !KNOWN_LABEL_RE.test(value);
 }
 
+function isBoilerplateLine(line: string): boolean {
+  if (BOILERPLATE_LINE_RE.test(line)) return true;
+  if (/^\d{4}[/-]\d{2}[/-]\d{2}/.test(line)) return true; // date-first lines
+  if (line.length > 80) return true; // likely a sentence/paragraph, not a name
+  if (/[.?!]\s*$/.test(line) && line.split(/\s+/).length > 6) return true; // sentence-like
+  return false;
+}
+
 /**
- * Real Gauteng BRS/SRS documents follow one fixed template — a "Title:" row
- * near the top of a labeled table, followed by Purpose/Reason, Root Cause,
- * Current Process, Requirement Description, Target Outcome, etc. They
- * describe business/functional requirements, not test-execution parameters:
- * no target URLs, no concurrency levels, no durations. So this only pulls
- * what's actually there — a name for the test — rather than pretending to
- * find load-test config that isn't part of the template.
+ * Real Gauteng BRS/SRS documents don't share one fixed template — some use a
+ * "Title:" row, some a "Project" row in a Document Control table, and some
+ * (reports, non-BRS documents) have no labeled name field at all and just
+ * put the system's name as the first line of the cover page. Try the
+ * explicit labels first, then fall back to the first line of real content
+ * (skipping institutional/boilerplate headers), then the filename.
  */
 function extractTestName(text: string, fallbackFilename: string): string {
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
-    // Colon is required (not optional) here — otherwise a bare "Title:" line
-    // with nothing after it lets the regex backtrack into capturing the
-    // colon itself as the "value".
-    const inline = /^title\s*:\s*(.+)$/i.exec(line);
-    const inlineValue = inline?.[1]?.trim();
-    if (looksLikeUsableTitle(inlineValue)) return inlineValue;
+    for (const label of NAME_LABELS) {
+      // Colon is required (not optional) for the inline match — otherwise a
+      // bare "Title:" line with nothing after it lets the regex backtrack
+      // into capturing the colon itself as the "value".
+      const inline = new RegExp(`^${label}\\s*:\\s*(.+)$`, "i").exec(line);
+      const inlineValue = inline?.[1]?.trim();
+      if (looksLikeUsableTitle(inlineValue)) return inlineValue;
 
-    if (/^title\s*:?\s*$/i.test(line)) {
-      const next = lines[i + 1]?.trim();
-      if (looksLikeUsableTitle(next)) return next;
+      if (new RegExp(`^${label}\\s*:?\\s*$`, "i").test(line)) {
+        const next = lines[i + 1]?.trim();
+        if (looksLikeUsableTitle(next)) return next;
+      }
     }
   }
+
+  for (const line of lines) {
+    if (isBoilerplateLine(line)) continue;
+    if (looksLikeUsableTitle(line)) return line;
+  }
+
   return fallbackFilename.replace(/\.(pdf|docx|txt)$/i, "").replace(/[_-]+/g, " ").trim();
 }
 

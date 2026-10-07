@@ -16,8 +16,9 @@ import {
 } from "recharts";
 import { gautengLogoB64 } from "~/lib/gauteng-logo-b64";
 import {
-  REPORT_COLORS, addChart, captureChart, drawFooter, narrativeBox,
-  pageBand, pickPercentile, sectionHeading, toPercent, verdictCellStyler, verdictFor,
+  REPORT_COLORS, addChart, captureChart, deploymentReadiness, drawFooter, narrativeBox,
+  pageBand, pickPercentile, readinessBanner, sectionHeading, suggestFix, toPercent,
+  verdictCellStyler, verdictFor,
 } from "~/lib/pdf-report";
 import type {
   ScenarioFinalMetrics,
@@ -236,15 +237,29 @@ export function ScenarioResultsView({
       const afterTables = (doc as any).lastAutoTable.finalY + 8;
       const afterNarrative = narrativeBox(doc, "What went right", narrative.right, afterTables, REPORT_COLORS.green);
       const afterNarrative2 = narrativeBox(doc, "What went wrong", narrative.wrong, afterNarrative, REPORT_COLORS.red);
-      addChart(doc, avgTimeImg, 14, afterNarrative2, 182, 58, "Average Response Time per Step (ms)");
+
+      // Deployment readiness — an honest read of this run's own numbers, not
+      // a substitute for a human reviewer's judgment call.
+      const failingSteps = stepEntries.filter(([, m]) => verdictFor(stepSuccessRate(m), m.total_requests ?? 0).verdict === "failing").length;
+      const degradedSteps = stepEntries.filter(([, m]) => verdictFor(stepSuccessRate(m), m.total_requests ?? 0).verdict === "degraded").length;
+      const overallSuccessPct = 100 - toPercent(summary.error_rate ?? 0);
+      const readiness = deploymentReadiness(overallSuccessPct, failingSteps, degradedSteps);
+      const afterReadiness = readinessBanner(doc, readiness.verdict, readiness.label, readiness.detail, afterNarrative2);
+
+      addChart(doc, avgTimeImg, 14, afterReadiness, 182, 58, "Average Response Time per Step (ms)");
 
       // ════════════════════════ PAGE 2 — PER-STEP BREAKDOWN ═════════════════
       doc.addPage();
       pageBand(doc, "Per-Step Breakdown");
+      doc.setFontSize(7.5);
+      doc.setFont("helvetica", "italic");
+      doc.setTextColor(...REPORT_COLORS.grey);
+      doc.text("Each step is evaluated as a test case against a 99% success-rate target.", 14, 16);
+      doc.setTextColor(...charcoal);
 
       if (stepEntries.length > 0) {
         autoTable(doc, {
-          startY: 17,
+          startY: 19,
           head: [["Step", "Samples", "Success", "Avg (ms)", "P95 (ms)", "Errors", "Status"]],
           body: stepEntries.map(([label, m]) => {
             const rate = stepSuccessRate(m);
@@ -272,7 +287,7 @@ export function ScenarioResultsView({
         });
       }
 
-      const chartTop = stepEntries.length > 0 ? (doc as any).lastAutoTable.finalY + 10 : 20;
+      const chartTop = stepEntries.length > 0 ? (doc as any).lastAutoTable.finalY + 10 : 22;
       addChart(doc, successImg, 14, chartTop, 90, 55, "Success Rate per Step (%)");
       if ((summary.error_count ?? 0) > 0) {
         addChart(doc, errorsImg, 112, chartTop, 84, 55, "Errors per Step");
@@ -297,11 +312,12 @@ export function ScenarioResultsView({
           y += 4;
           autoTable(doc, {
             startY: y,
-            head: [["Status Code", "Error", "Count"]],
-            body: m.errors.map((e) => [e.status_code, e.error, e.count]),
+            head: [["Status Code", "Error", "Count", "Suggested Fix"]],
+            body: m.errors.map((e) => [e.status_code, e.error, e.count, suggestFix(e.status_code, e.error)]),
             headStyles: { fillColor: [80, 80, 80] as [number, number, number], textColor: white, fontSize: 7.5 },
-            bodyStyles: { fontSize: 7.5, textColor: charcoal },
+            bodyStyles: { fontSize: 7, textColor: charcoal },
             alternateRowStyles: { fillColor: rowAlt },
+            columnStyles: { 1: { cellWidth: 55 }, 3: { cellWidth: 65 } },
             margin: { left: 14, right: 14 },
           });
           y = (doc as any).lastAutoTable.finalY + 8;
