@@ -89,6 +89,13 @@ export function TestConfiguration() {
   });
 
   const { data: savedEnvironments } = api.environments.list.useQuery();
+  // Headers from the most recently picked saved environment. The engine
+  // applies one flat header set to every request in a run, so picking a
+  // second environment replaces rather than merges with the first.
+  const [activeEnvironment, setActiveEnvironment] = useState<{
+    name: string;
+    headers: Record<string, string>;
+  } | null>(null);
 
   const addUrl = () => {
     setUrls([...urls, { id: Date.now(), url: "" }]);
@@ -159,6 +166,10 @@ export function TestConfiguration() {
       total_duration: totalDuration,
       phase_length: rampDurationNum,
       hold_duration: holdDurationNum,
+      headers:
+        activeEnvironment && Object.keys(activeEnvironment.headers).length > 0
+          ? activeEnvironment.headers
+          : undefined,
     });
   };
 
@@ -615,7 +626,10 @@ export function TestConfiguration() {
                 <Label className="shrink-0 text-xs text-gray-500">Load from saved environment</Label>
                 <Select onValueChange={(v) => {
                   const env = savedEnvironments.find((e) => e.id === v);
-                  if (env) addUrlFromEnvironment(env.baseUrl);
+                  if (env) {
+                    addUrlFromEnvironment(env.baseUrl);
+                    setActiveEnvironment({ name: env.name, headers: env.headers });
+                  }
                 }}>
                   <SelectTrigger className="h-8 w-56 border-gray-300 text-xs">
                     <SelectValue placeholder="Choose an environment…" />
@@ -626,6 +640,19 @@ export function TestConfiguration() {
                     ))}
                   </SelectContent>
                 </Select>
+                {activeEnvironment && Object.keys(activeEnvironment.headers).length > 0 && (
+                  <span className="flex items-center gap-1 text-xs text-gray-500">
+                    Headers from &ldquo;{activeEnvironment.name}&rdquo; will be sent with every request
+                    <button
+                      type="button"
+                      onClick={() => setActiveEnvironment(null)}
+                      className="text-gray-400 hover:text-gray-700"
+                      aria-label="Clear environment headers"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </span>
+                )}
               </div>
             )}
             <div className="flex gap-2">

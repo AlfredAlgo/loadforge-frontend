@@ -76,6 +76,7 @@ export const testsRouter = createTRPCRouter({
         hold_duration: z.number().min(0),
         total_duration: z.number().positive(),
         name: z.string().optional(),
+        headers: z.record(z.string(), z.string()).optional(),
       })
     ).mutation(async ({ input, ctx }) => {
       const socket = getSocket();
@@ -110,6 +111,7 @@ export const testsRouter = createTRPCRouter({
           phase_length: input.phase_length,
           test_id: id,
           user_id: userId,
+          headers: input.headers,
         });
 
         return {
