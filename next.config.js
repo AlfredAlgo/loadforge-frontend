@@ -15,7 +15,7 @@ const config = {
     // '.../pdf.worker.mjs'" on every PDF upload. Keeping these packages
     // external makes Next require() them from node_modules as-is instead,
     // the same way they work outside a bundler.
-    serverExternalPackages: ["pdf-parse", "mammoth"],
+    serverExternalPackages: ["pdf-parse", "mammoth", "tesseract.js"],
 };
 
 export default config;

@@ -77,6 +77,7 @@ export const testsRouter = createTRPCRouter({
         total_duration: z.number().positive(),
         name: z.string().optional(),
         headers: z.record(z.string(), z.string()).optional(),
+        brs_context: z.record(z.string(), z.string()).optional(),
       })
     ).mutation(async ({ input, ctx }) => {
       const socket = getSocket();
@@ -103,6 +104,7 @@ export const testsRouter = createTRPCRouter({
           ramp_down_time: input.ramp_down_time,
           status: "running",
           team_id: ctx.user.teamId,
+          brs_context: input.brs_context ?? null,
         });
 
         socket.emit("start_test", {
@@ -137,6 +139,7 @@ export const testsRouter = createTRPCRouter({
         users: z.number().int().positive().optional(),
         rampup: z.number().int().nonnegative().optional(),
         duration: z.number().int().positive().optional(),
+        brs_context: z.record(z.string(), z.string()).optional(),
       }),
     )
     .mutation(async ({ input, ctx }) => {
@@ -164,6 +167,7 @@ export const testsRouter = createTRPCRouter({
           jmx_filename: input.jmx_filename ?? null,
           status: "running",
           team_id: ctx.user.teamId,
+          brs_context: input.brs_context ?? null,
         });
 
         socket.emit("start_scenario", {
@@ -223,6 +227,7 @@ export const testsRouter = createTRPCRouter({
           status: completeTests.status,
           mode: completeTests.mode,
           scenario_metrics: completeTests.scenario_metrics,
+          brs_context: completeTests.brs_context,
           created_at: completeTests.created_at,
           completed_at: completeTests.completed_at,
           user_id: completeTests.user_id,

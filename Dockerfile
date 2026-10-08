@@ -22,6 +22,12 @@ FROM node:20-alpine AS runner
 
 WORKDIR /app
 
+# poppler-utils provides `pdftoppm`, used to rasterize scanned BRS PDFs to
+# images for the Tesseract.js OCR fallback in src/lib/ocr.ts. Without this,
+# OCR on a scanned PDF fails with a clear "is poppler-utils installed?"
+# error instead of a cryptic ENOENT.
+RUN apk add --no-cache poppler-utils
+
 RUN corepack enable && corepack prepare pnpm@9.15.4 --activate
 
 COPY --from=builder /app/package.json ./

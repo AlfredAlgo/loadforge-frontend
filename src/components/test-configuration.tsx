@@ -26,17 +26,7 @@ import {
 import { Plus, X, Upload, Download, Play, Loader2, Pencil } from "lucide-react";
 import { api } from "~/trpc/react";
 import { formatTRPCError } from "~/lib/format-error";
-
-const BRS_FIELD_LABELS: Record<string, string> = {
-  title: "Title of system",
-  requestedBy: "Requested by",
-  purpose: "Purpose / Reason",
-  rootCause: "Root cause",
-  currentProcess: "Current process",
-  requirementDescription: "Requirement description",
-  targetOutcome: "Target outcome",
-  priority: "Priority level",
-};
+import { BrsUploadPanel, type BrsApplyPayload } from "~/components/brs-upload-panel";
 
 export function TestConfiguration() {
   const [urls, setUrls] = useState([{ id: 1, url: "" }]);
@@ -46,19 +36,7 @@ export function TestConfiguration() {
   const [isConnected, setIsConnected] = useState(false);
   const [testName, setTestName] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [brsMode, setBrsMode] = useState<"upload" | "manual">("upload");
-  const [brsUploading, setBrsUploading] = useState(false);
-  const [brsSummary, setBrsSummary] = useState<{ source: string; lines: string[] } | null>(null);
-  const [brsManual, setBrsManual] = useState({
-    title: "",
-    requestedBy: "",
-    purpose: "",
-    rootCause: "",
-    currentProcess: "",
-    requirementDescription: "",
-    targetOutcome: "",
-    priority: "",
-  });
+  const [brsContext, setBrsContext] = useState<Record<string, string> | null>(null);
 
   const router = useRouter();
 
@@ -170,65 +148,16 @@ export function TestConfiguration() {
         activeEnvironment && Object.keys(activeEnvironment.headers).length > 0
           ? activeEnvironment.headers
           : undefined,
+      brs_context: brsContext && Object.keys(brsContext).length > 0 ? brsContext : undefined,
     });
   };
 
-  const handleBrsUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const lower = file.name.toLowerCase();
-    if (!lower.endsWith(".pdf") && !lower.endsWith(".docx") && !lower.endsWith(".txt")) {
-      setError("Please upload a .pdf, .docx, or .txt BRS document.");
-      e.target.value = "";
-      return;
+  const handleBrsApply = ({ testName: name, urls: brsUrls, brsContext: context }: BrsApplyPayload) => {
+    if (!testName.trim()) setTestName(name);
+    if (brsUrls.length > 0) {
+      setUrls(brsUrls.map((url, i) => ({ id: Date.now() + i, url })));
     }
-    setError(null);
-    setBrsSummary(null);
-    setBrsUploading(true);
-    try {
-      const form = new FormData();
-      form.append("file", file);
-      const res = await fetch("/api/brs/parse", { method: "POST", body: form });
-      const body = await res.json();
-      if (!res.ok) {
-        setError(body.error || "Failed to parse BRS document.");
-        return;
-      }
-
-      const data = body as { test_name: string; urls: string[]; summary: string };
-
-      if (data.test_name && !testName.trim()) setTestName(data.test_name);
-      if (data.urls.length > 0) {
-        setUrls(data.urls.map((url, i) => ({ id: Date.now() + i, url })));
-      }
-
-      setBrsSummary({ source: file.name, lines: [data.summary] });
-    } catch (exc) {
-      setError(exc instanceof Error ? exc.message : "Failed to parse BRS document.");
-    } finally {
-      setBrsUploading(false);
-      e.target.value = "";
-    }
-  };
-
-  const applyBrsManual = () => {
-    const title = brsManual.title.trim();
-    if (!title) {
-      setError("Please provide at least the title of the system.");
-      return;
-    }
-    setError(null);
-    if (!testName.trim()) setTestName(title);
-
-    const lines = Object.entries(brsManual)
-      .filter(([, value]) => value.trim().length > 0)
-      .map(([key, value]) => {
-        const label = BRS_FIELD_LABELS[key] ?? key;
-        const trimmed = value.trim();
-        return `${label}: ${trimmed.length > 140 ? trimmed.slice(0, 140) + "…" : trimmed}`;
-      });
-
-    setBrsSummary({ source: "manual entry", lines });
+    setBrsContext(context);
   };
 
   const exportConfig = () => {
@@ -385,206 +314,7 @@ export function TestConfiguration() {
             </div>
           </CardContent>
         </Card>
-        <Card className="border-gray-200">
-          <CardHeader>
-            <CardTitle className="text-gray-900">BRS Document (optional)</CardTitle>
-            <CardDescription className="text-gray-600">
-              {brsMode === "upload"
-                ? "Upload a Business Requirements Specification to pre-fill the test name and any referenced URLs. Concurrency and duration aren't part of the standard BRS template, so you'll still set those yourself."
-                : "Enter the relevant BRS details yourself — useful when the document is a scanned image the parser can't read."}
-            </CardDescription>
-            <div className="mt-3 flex gap-2">
-              <Button
-                type="button"
-                size="sm"
-                variant={brsMode === "upload" ? "default" : "outline"}
-                className={brsMode === "upload" ? "" : "border-gray-300 bg-transparent"}
-                onClick={() => setBrsMode("upload")}
-                disabled={start.isPending}
-              >
-                Upload document
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant={brsMode === "manual" ? "default" : "outline"}
-                className={brsMode === "manual" ? "" : "border-gray-300 bg-transparent"}
-                onClick={() => setBrsMode("manual")}
-                disabled={start.isPending}
-              >
-                Enter manually
-              </Button>
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {brsMode === "upload" ? (
-              <label>
-                <input
-                  type="file"
-                  accept=".pdf,.docx,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain"
-                  onChange={handleBrsUpload}
-                  className="hidden"
-                  disabled={brsUploading || start.isPending}
-                />
-                <Button
-                  variant="outline"
-                  className="border-gray-300 bg-transparent"
-                  asChild
-                  disabled={brsUploading || start.isPending}
-                >
-                  <span>
-                    {brsUploading ? (
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    ) : (
-                      <Upload className="mr-2 h-4 w-4" />
-                    )}
-                    {brsUploading ? "Reading document…" : "Upload BRS (.pdf, .docx, or .txt)"}
-                  </span>
-                </Button>
-              </label>
-            ) : (
-              <div className="space-y-4">
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <div>
-                    <Label htmlFor="brs-title" className="text-gray-700">
-                      Title of system
-                    </Label>
-                    <Input
-                      id="brs-title"
-                      placeholder="e.g. Property Rates and Taxes Payment System"
-                      value={brsManual.title}
-                      onChange={(e) => setBrsManual((prev) => ({ ...prev, title: e.target.value }))}
-                      className="border-gray-300"
-                      disabled={start.isPending}
-                    />
-                  </div>
-                  <div>
-                    <Label htmlFor="brs-requested-by" className="text-gray-700">
-                      Requested by
-                    </Label>
-                    <Input
-                      id="brs-requested-by"
-                      placeholder="e.g. Department of Infrastructure Development"
-                      value={brsManual.requestedBy}
-                      onChange={(e) => setBrsManual((prev) => ({ ...prev, requestedBy: e.target.value }))}
-                      className="border-gray-300"
-                      disabled={start.isPending}
-                    />
-                  </div>
-                </div>
-                <div>
-                  <Label htmlFor="brs-purpose" className="text-gray-700">
-                    Purpose / Reason
-                  </Label>
-                  <Textarea
-                    id="brs-purpose"
-                    placeholder="Why this system or change is needed"
-                    value={brsManual.purpose}
-                    onChange={(e) => setBrsManual((prev) => ({ ...prev, purpose: e.target.value }))}
-                    className="border-gray-300"
-                    disabled={start.isPending}
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="brs-root-cause" className="text-gray-700">
-                    Root cause
-                  </Label>
-                  <Textarea
-                    id="brs-root-cause"
-                    placeholder="What problem this addresses"
-                    value={brsManual.rootCause}
-                    onChange={(e) => setBrsManual((prev) => ({ ...prev, rootCause: e.target.value }))}
-                    className="border-gray-300"
-                    disabled={start.isPending}
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="brs-current-process" className="text-gray-700">
-                    Current process
-                  </Label>
-                  <Textarea
-                    id="brs-current-process"
-                    placeholder="How this is handled today"
-                    value={brsManual.currentProcess}
-                    onChange={(e) => setBrsManual((prev) => ({ ...prev, currentProcess: e.target.value }))}
-                    className="border-gray-300"
-                    disabled={start.isPending}
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="brs-requirement-description" className="text-gray-700">
-                    Requirement description
-                  </Label>
-                  <Textarea
-                    id="brs-requirement-description"
-                    placeholder="What the system should do"
-                    value={brsManual.requirementDescription}
-                    onChange={(e) =>
-                      setBrsManual((prev) => ({ ...prev, requirementDescription: e.target.value }))
-                    }
-                    className="border-gray-300"
-                    disabled={start.isPending}
-                  />
-                </div>
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <div>
-                    <Label htmlFor="brs-target-outcome" className="text-gray-700">
-                      Target outcome
-                    </Label>
-                    <Textarea
-                      id="brs-target-outcome"
-                      placeholder="What success looks like"
-                      value={brsManual.targetOutcome}
-                      onChange={(e) => setBrsManual((prev) => ({ ...prev, targetOutcome: e.target.value }))}
-                      className="border-gray-300"
-                      disabled={start.isPending}
-                    />
-                  </div>
-                  <div>
-                    <Label htmlFor="brs-priority" className="text-gray-700">
-                      Priority level
-                    </Label>
-                    <Select
-                      value={brsManual.priority}
-                      onValueChange={(value) => setBrsManual((prev) => ({ ...prev, priority: value }))}
-                      disabled={start.isPending}
-                    >
-                      <SelectTrigger id="brs-priority" className="border-gray-300">
-                        <SelectValue placeholder="Select priority" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="Low">Low</SelectItem>
-                        <SelectItem value="Medium">Medium</SelectItem>
-                        <SelectItem value="High">High</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="border-gray-300 bg-transparent"
-                  onClick={applyBrsManual}
-                  disabled={start.isPending}
-                >
-                  <Pencil className="mr-2 h-4 w-4" />
-                  Use these details
-                </Button>
-              </div>
-            )}
-            {brsSummary && (
-              <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-sm">
-                <p className="font-medium text-blue-800">Pre-filled from {brsSummary.source}</p>
-                <ul className="mt-1 list-inside list-disc space-y-0.5 text-blue-700">
-                  {brsSummary.lines.map((line, i) => (
-                    <li key={i}>{line}</li>
-                  ))}
-                </ul>
-                <p className="mt-1 text-xs text-blue-600">Review the fields below before starting the test.</p>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+        <BrsUploadPanel onApply={handleBrsApply} disabled={start.isPending} supportsUrls />
         <Card className="border-gray-200">
           <CardHeader>
             <CardTitle className="text-gray-900">Test URLs</CardTitle>

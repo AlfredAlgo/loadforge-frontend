@@ -1,4 +1,5 @@
 import type { jsPDF } from "jspdf";
+import { BRS_FIELD_LABELS, BRS_REPORT_FIELD_ORDER } from "~/lib/brs-fields";
 
 export type RGB = [number, number, number];
 
@@ -353,6 +354,40 @@ export function textBlock(doc: jsPDF, title: string, paragraph: string, y: numbe
   const wrapped = doc.splitTextToSize(paragraph, PAGE_W - 28) as string[];
   doc.text(wrapped, 14, y + 7);
   return y + 7 + wrapped.length * 4.3 + 6;
+}
+
+/**
+ * Renders whatever BRS fields were actually captured (uploaded or typed
+ * manually) as a labeled list — the "BRS actually informs the report"
+ * feature. Returns the unchanged y if there's nothing to show, so callers
+ * can call this unconditionally without an extra guard.
+ */
+export function brsContextSection(
+  doc: jsPDF,
+  context: Record<string, string> | null | undefined,
+  y: number,
+): number {
+  const entries = BRS_REPORT_FIELD_ORDER
+    .filter((key) => context?.[key])
+    .map((key) => [BRS_FIELD_LABELS[key] ?? key, context![key]!] as const);
+  if (entries.length === 0) return y;
+
+  const { charcoal, navy } = REPORT_COLORS;
+  sectionHeading(doc, "Business Requirements Context", y);
+  let cursor = y + 7;
+  doc.setFontSize(8.3);
+  for (const [label, value] of entries) {
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(...navy);
+    doc.text(`${label}:`, 14, cursor);
+    const labelWidth = doc.getTextWidth(`${label}: `);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(...charcoal);
+    const wrapped = doc.splitTextToSize(value, PAGE_W - 28 - labelWidth) as string[];
+    doc.text(wrapped, 14 + labelWidth, cursor);
+    cursor += Math.max(wrapped.length, 1) * 4.3 + 1.5;
+  }
+  return cursor + 5;
 }
 
 export function pageBand(doc: jsPDF, title: string) {

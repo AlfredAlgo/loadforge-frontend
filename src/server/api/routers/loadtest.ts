@@ -46,6 +46,7 @@ export const loadTestRouter = createTRPCRouter({
       requestsPerSecond: result.requests_per_second,
       urlBreakdown: result.url_breakdown as any, // Cast to any or define a more specific type if necessary
       phaseMetrics: result.phase_metrics as any, // Cast to any or define a more specific type if necessary
+      brsContext: (test?.brs_context as Record<string, string> | null) ?? null,
     };
   }),
   // Add to loadTestRouter

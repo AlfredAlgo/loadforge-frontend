@@ -149,6 +149,12 @@ export const completeTests = createTable("load_test", {
   jmx_filename: varchar("jmx_filename", { length: 512 }),
   file_id: varchar("file_id", { length: 64 }), // matches backend's UUID file_id
   scenario_metrics: jsonb("scenario_metrics"), // full final-metrics blob from backend on scenario_completed
+  // Structured BRS fields (purpose, root cause, current process,
+  // requirement description, target outcome, priority), from either an
+  // uploaded BRS document or the manual-entry form — same shape either
+  // way. Surfaced in the PDF/Excel report so the BRS actually informs the
+  // report, not just the test's name. Keys match BRS_FIELD_LABELS.
+  brs_context: jsonb("brs_context"),
   status: varchar("status", { length: 50 }).default("pending").notNull(), // pending, running, completed, failed
   // Snapshot of the creator's team at the time the test was started, so a
   // test stays visible to that team even if the creator later changes teams.

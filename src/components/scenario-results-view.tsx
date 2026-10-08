@@ -17,9 +17,10 @@ import {
 import { gautengLogoB64 } from "~/lib/gauteng-logo-b64";
 import { api } from "~/trpc/react";
 import { SignOffPanel } from "~/components/sign-off-panel";
-import { downloadCsv, toCsv } from "~/lib/csv-export";
+import { BrsContextCard } from "~/components/brs-context-card";
+import { BRS_FIELD_LABELS, BRS_REPORT_FIELD_ORDER } from "~/lib/brs-fields";
 import {
-  REPORT_COLORS, addChart, captureChart, deploymentReadiness, drawFooter, narrativeBox,
+  REPORT_COLORS, addChart, brsContextSection, captureChart, deploymentReadiness, drawFooter, narrativeBox,
   pageBand, pickPercentile, readinessBanner, sectionHeading, signOffSection, suggestFix, textBlock, toPercent,
   verdictCellStyler, verdictFor,
 } from "~/lib/pdf-report";
@@ -189,12 +190,14 @@ export function ScenarioResultsView({
   status,
   mode,
   metrics,
+  brsContext = null,
 }: {
   testId: string | null;
   name: string;
   status: string;
   mode: string | null;
   metrics: ScenarioFinalMetrics;
+  brsContext?: Record<string, string> | null;
 }) {
   const [exporting, setExporting] = useState(false);
   const pdfAvgTimeRef = useRef<HTMLDivElement>(null);
@@ -207,6 +210,9 @@ export function ScenarioResultsView({
   const stepEntries = Object.entries(perLabel);
   const stepsWithErrors = stepEntries.filter(([, m]) => m.errors && m.errors.length > 0);
   const isSuccess = toPercent(summary.error_rate ?? 0) === 0;
+
+  // Shared between the PDF and Excel exports — computed once here.
+  const narrative = buildNarrative(summary, stepEntries);
 
   // Deployment readiness tiers (50 / 70 / 85) — computed once here so the
   // on-screen badge and the PDF's readiness banner always agree.
@@ -256,7 +262,6 @@ export function ScenarioResultsView({
       ]);
 
       const modeLabel = mode === "functional" ? "Functional Test" : mode === "load" ? "Scenario Load Test" : "Scenario Test";
-      const narrative = buildNarrative(summary, stepEntries);
 
       // ════════════════════════════ PAGE 1 — COVER + SUMMARY ════════════════
       doc.setFillColor(...navy);
@@ -292,6 +297,15 @@ export function ScenarioResultsView({
       const testScope = buildTestScope(stepEntries, summary);
       const afterExecSummary = textBlock(doc, "Executive Summary", execSummary, 53);
       textBlock(doc, "Test Scope", testScope, afterExecSummary);
+
+      // Business Requirements Context — its own page only when there's
+      // actually something to show.
+      const hasBrsContext = BRS_REPORT_FIELD_ORDER.some((key) => brsContext?.[key]);
+      if (hasBrsContext) {
+        doc.addPage();
+        pageBand(doc, "Business Requirements Context");
+        brsContextSection(doc, brsContext, 19);
+      }
 
       // ════════════════════════ PAGE 2 — TEST OVERVIEW + NARRATIVE ══════════
       doc.addPage();
@@ -440,35 +454,61 @@ export function ScenarioResultsView({
     }
   };
 
-  // ─── Raw data export (CSV, Excel-compatible) ───────────────────────────
-  const exportToCSV = () => {
-    const stepRows = stepEntries.map(([label, m]) => ({
-      Step: label,
-      Samples: m.total_requests ?? 0,
-      "Success Rate (%)": stepSuccessRate(m).toFixed(1),
-      "Avg (ms)": m.average_time !== null ? Math.round(m.average_time) : "",
-      "P95 (ms)": (() => { const p = stepPercentile(m, 95); return p !== null ? Math.round(p) : ""; })(),
-      Errors: m.errors?.reduce((sum, e) => sum + e.count, 0) ?? 0,
-      Status: verdictFor(stepSuccessRate(m), m.total_requests ?? 0).label,
-    }));
-    const summaryRows = [{
-      "Test ID": testId ?? "N/A",
-      "Test Name": name || "—",
-      Mode: mode ?? "—",
-      "Total Samples": summary.total_samples ?? 0,
-      "Successful Samples": summary.success_count ?? 0,
-      "Failed Samples": summary.error_count ?? 0,
-      "Error Rate (%)": pct(summary.error_rate),
-      "Throughput (req/s)": (summary.throughput_per_sec ?? 0).toFixed(1),
-      "Duration (s)": (summary.duration_seconds ?? 0).toFixed(1),
-      "Deployment Readiness": readiness.label,
-    }];
-    const sections = [
-      ["=== TEST SUMMARY ===", toCsv(summaryRows)],
-      ["=== PER-STEP BREAKDOWN ===", stepRows.length ? toCsv(stepRows) : "No step data"],
-    ];
-    const csv = sections.map(([heading, body]) => `${heading}\n${body}`).join("\n\n");
-    downloadCsv(`functional-test-report-${(testId ?? "export").slice(0, 8)}.csv`, csv);
+  // ─── Raw data export — a real multi-sheet, styled .xlsx ───────────────
+  const exportToExcel = async () => {
+    const { buildAndDownloadWorkbook, addSummarySheet, addTableSheet } = await import("~/lib/excel-export");
+
+    const brsNotes = BRS_REPORT_FIELD_ORDER
+      .filter((key) => brsContext?.[key])
+      .map((key) => `${BRS_FIELD_LABELS[key] ?? key}: ${brsContext![key]!}`);
+
+    await buildAndDownloadWorkbook(`functional-test-report-${(testId ?? "export").slice(0, 8)}.xlsx`, (wb) => {
+      addSummarySheet(wb, {
+        title: `${name || "Scenario"} — Summary`,
+        stats: [
+          ["Test ID", testId ?? "N/A"],
+          ["Test Name", name || "—"],
+          ["Mode", mode ?? "—"],
+          ["Total Samples", summary.total_samples ?? 0],
+          ["Successful Samples", summary.success_count ?? 0],
+          ["Failed Samples", summary.error_count ?? 0],
+          ["Error Rate (%)", pct(summary.error_rate)],
+          ["Throughput (req/s)", (summary.throughput_per_sec ?? 0).toFixed(1)],
+          ["Duration (s)", (summary.duration_seconds ?? 0).toFixed(1)],
+          ["Deployment Readiness", readiness.label],
+        ],
+        notes: [
+          { heading: "What went right", lines: narrative.right },
+          { heading: "What went wrong", lines: narrative.wrong },
+          ...(brsNotes.length > 0 ? [{ heading: "Business Requirements Context", lines: brsNotes }] : []),
+        ],
+      });
+
+      addTableSheet(
+        wb, "Per-Step Breakdown",
+        [
+          { header: "Step", key: "step", width: 34 },
+          { header: "Samples", key: "samples", width: 12 },
+          { header: "Success Rate (%)", key: "rate", width: 16 },
+          { header: "Avg (ms)", key: "avg", width: 12 },
+          { header: "P95 (ms)", key: "p95", width: 12 },
+          { header: "Errors", key: "errors", width: 10 },
+          { header: "Status", key: "status", width: 26 },
+        ],
+        stepEntries.map(([label, m]) => {
+          const p95 = stepPercentile(m, 95);
+          return {
+            step: label,
+            samples: m.total_requests ?? 0,
+            rate: Number(stepSuccessRate(m).toFixed(1)),
+            avg: m.average_time !== null ? Math.round(m.average_time) : "",
+            p95: p95 !== null ? Math.round(p95) : "",
+            errors: m.errors?.reduce((sum, e) => sum + e.count, 0) ?? 0,
+            status: verdictFor(stepSuccessRate(m), m.total_requests ?? 0).label,
+          };
+        }),
+      );
+    });
   };
 
   return (
@@ -480,12 +520,12 @@ export function ScenarioResultsView({
         </div>
         <div className="flex items-center gap-3">
           <Button
-            onClick={exportToCSV}
+            onClick={() => { void exportToExcel() }}
             variant="outline"
             className="border-gray-200 text-gray-600 hover:bg-gray-50 hover:text-gray-700"
           >
             <Sheet className="mr-2 h-4 w-4" />
-            Export CSV
+            Export Excel
           </Button>
           <Button
             onClick={exportToPDF}
@@ -501,7 +541,8 @@ export function ScenarioResultsView({
         </div>
       </div>
 
-      <div className="mb-6">
+      <div className="mb-6 space-y-6">
+        <BrsContextCard context={brsContext} />
         <SignOffPanel testId={testId} signOffs={signOffs ?? []} />
       </div>
 

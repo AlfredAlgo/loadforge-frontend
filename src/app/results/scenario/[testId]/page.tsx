@@ -55,6 +55,7 @@ export default function ScenarioResultsPage() {
           status={data.status ?? "unknown"}
           mode={data.mode ?? null}
           metrics={metrics}
+          brsContext={(data.brs_context as Record<string, string> | null) ?? null}
         />
       ) : (
         <div className="mx-auto max-w-5xl px-4 py-8 text-gray-700">

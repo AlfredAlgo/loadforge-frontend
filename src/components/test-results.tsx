@@ -12,11 +12,12 @@ import { CheckCircle2, Clock, TrendingUp, AlertCircle, ChevronDown, FileDown, Sh
 import { gautengLogoB64 } from "~/lib/gauteng-logo-b64"
 import { api } from "~/trpc/react"
 import { SignOffPanel } from "~/components/sign-off-panel"
-import { downloadCsv, toCsv } from "~/lib/csv-export"
+import { BrsContextCard } from "~/components/brs-context-card"
 import {
-  REPORT_COLORS, addChart, captureChart, deploymentReadiness, drawFooter, narrativeBox,
+  REPORT_COLORS, addChart, brsContextSection, captureChart, deploymentReadiness, drawFooter, narrativeBox,
   pageBand, readinessBanner, sectionHeading, signOffSection, suggestFix, textBlock, verdictCellStyler, verdictFor,
 } from "~/lib/pdf-report"
+import { BRS_FIELD_LABELS, BRS_REPORT_FIELD_ORDER } from "~/lib/brs-fields"
 
 interface TestResultsProps {
   results: {
@@ -31,6 +32,7 @@ interface TestResultsProps {
     p95ResponseTime: number;
     p99ResponseTime: number;
     requestsPerSecond: number;
+    brsContext?: Record<string, string> | null;
     urlBreakdown: Record<string, {
       url: string;
       requests: number;
@@ -211,6 +213,9 @@ export const TestResults: React.FC<TestResultsProps> = ({ results, phases }) => 
   const [expandedUrls, setExpandedUrls]  = useState<Set<string>>(new Set())
   const [exporting, setExporting]        = useState(false)
 
+  // Shared between the PDF and Excel exports — computed once here.
+  const narrative = buildLoadNarrative(results, phases)
+
   // Hidden chart refs for PDF capture
   const pdfResponseRef = useRef<HTMLDivElement>(null)   // P50/P95/P99 line chart
   const pdfRequestsRef = useRef<HTMLDivElement>(null)   // Requests per phase
@@ -278,8 +283,6 @@ export const TestResults: React.FC<TestResultsProps> = ({ results, phases }) => 
         captureChart(pdfErrorsRef),
       ])
 
-      const narrative = buildLoadNarrative(results, phases)
-
       // ══════════════════════════════════════════════════════════════════════
       // PAGE 1 — COVER + SUMMARY TABLES
       // ══════════════════════════════════════════════════════════════════════
@@ -322,6 +325,16 @@ export const TestResults: React.FC<TestResultsProps> = ({ results, phases }) => 
       const testScope = buildTestScope(results, phases)
       const afterExecSummary = textBlock(doc, 'Executive Summary', execSummary, 53)
       textBlock(doc, 'Test Scope', testScope, afterExecSummary)
+
+      // Business Requirements Context — its own page only when there's
+      // actually something to show, so a test with no BRS attached doesn't
+      // get a blank page.
+      const hasBrsContext = BRS_REPORT_FIELD_ORDER.some((key) => results.brsContext?.[key])
+      if (hasBrsContext) {
+        doc.addPage()
+        pageBand(doc, 'Business Requirements Context')
+        brsContextSection(doc, results.brsContext, 19)
+      }
 
       // ══════════════════════════════════════════════════════════════════════
       // PAGE 2 — TEST OVERVIEW + NARRATIVE
@@ -511,48 +524,75 @@ export const TestResults: React.FC<TestResultsProps> = ({ results, phases }) => 
     }
   }
 
-  // ─── Raw data export (CSV, Excel-compatible) ───────────────────────────────
-  const exportToCSV = () => {
-    const phaseRows = phases.map(p => ({
-      Phase: p.phase,
-      Concurrency: p.concurrency,
-      Requests: p.requests,
-      Successful: p.successCount,
-      Errors: p.errorCount,
-      'Success Rate (%)': p.successRate.toFixed(1),
-      'P50 (ms)': p.percentiles.p50,
-      'P95 (ms)': p.percentiles.p95,
-      'P99 (ms)': p.percentiles.p99,
-      Status: verdictFor(p.successRate, p.requests).label,
-    }))
-    const urlRows = Object.entries(results.urlBreakdown ?? {}).map(([url, m]: [string, any]) => ({
-      URL: url,
-      Requests: m.requests ?? 0,
-      'Avg Response Time (ms)': m.avgResponseTime ?? 0,
-      'Success Rate (%)': Number(m.successRate ?? 0).toFixed(1),
-      Errors: (m.errors ?? []).reduce((s: number, e: any) => s + e.count, 0),
-    }))
-    const summaryRows = [{
-      'Test ID': results.testId ?? 'N/A',
-      'Total Requests': results.totalRequests,
-      'Successful Requests': results.successfulRequests,
-      'Failed Requests': results.failedRequests,
-      'Success Rate (%)': overallSuccessRate.toFixed(1),
-      'Avg Response Time (ms)': results.avgResponseTime,
-      'P50 (ms)': results.p50ResponseTime,
-      'P95 (ms)': results.p95ResponseTime,
-      'P99 (ms)': results.p99ResponseTime,
-      'Requests/Second': results.requestsPerSecond,
-      'Deployment Readiness': readiness.label,
-    }]
+  // ─── Raw data export — a real multi-sheet, styled .xlsx ───────────────────
+  const exportToExcel = async () => {
+    const { buildAndDownloadWorkbook, addSummarySheet, addTableSheet } = await import("~/lib/excel-export")
 
-    const sections = [
-      ['=== TEST SUMMARY ===', toCsv(summaryRows)],
-      ['=== PHASE BREAKDOWN ===', phaseRows.length ? toCsv(phaseRows) : 'No phase data'],
-      ['=== URL BREAKDOWN ===', urlRows.length ? toCsv(urlRows) : 'No URL data'],
-    ]
-    const csv = sections.map(([heading, body]) => `${heading}\n${body}`).join('\n\n')
-    downloadCsv(`performance-report-${(results.testId ?? 'export').slice(0, 8)}.csv`, csv)
+    const brsNotes = BRS_REPORT_FIELD_ORDER
+      .filter((key) => results.brsContext?.[key])
+      .map((key) => ({ heading: BRS_FIELD_LABELS[key] ?? key, lines: [results.brsContext![key]!] }))
+
+    await buildAndDownloadWorkbook(`performance-report-${(results.testId ?? 'export').slice(0, 8)}.xlsx`, (wb) => {
+      addSummarySheet(wb, {
+        title: 'Performance Test Report — Summary',
+        stats: [
+          ['Test ID', results.testId ?? 'N/A'],
+          ['Total Requests', results.totalRequests],
+          ['Successful Requests', results.successfulRequests],
+          ['Failed Requests', results.failedRequests],
+          ['Success Rate (%)', overallSuccessRate.toFixed(1)],
+          ['Avg Response Time (ms)', results.avgResponseTime],
+          ['P50 (ms)', results.p50ResponseTime],
+          ['P95 (ms)', results.p95ResponseTime],
+          ['P99 (ms)', results.p99ResponseTime],
+          ['Requests / Second', results.requestsPerSecond],
+          ['Deployment Readiness', readiness.label],
+        ],
+        notes: [
+          { heading: 'What went right', lines: narrative.right },
+          { heading: 'What went wrong', lines: narrative.wrong },
+          ...(brsNotes.length > 0 ? [{ heading: 'Business Requirements Context', lines: brsNotes.map(n => `${n.heading}: ${n.lines[0]}`) }] : []),
+        ],
+      })
+
+      addTableSheet(
+        wb, 'Phases',
+        [
+          { header: 'Phase', key: 'phase', width: 10 },
+          { header: 'Concurrency', key: 'concurrency', width: 14 },
+          { header: 'Requests', key: 'requests', width: 12 },
+          { header: 'Successful', key: 'successful', width: 12 },
+          { header: 'Errors', key: 'errors', width: 10 },
+          { header: 'Success Rate (%)', key: 'rate', width: 16 },
+          { header: 'P50 (ms)', key: 'p50', width: 12 },
+          { header: 'P95 (ms)', key: 'p95', width: 12 },
+          { header: 'P99 (ms)', key: 'p99', width: 12 },
+          { header: 'Status', key: 'status', width: 26 },
+        ],
+        phases.map(p => ({
+          phase: p.phase, concurrency: p.concurrency, requests: p.requests,
+          successful: p.successCount, errors: p.errorCount, rate: Number(p.successRate.toFixed(1)),
+          p50: p.percentiles.p50, p95: p.percentiles.p95, p99: p.percentiles.p99,
+          status: verdictFor(p.successRate, p.requests).label,
+        })),
+      )
+
+      addTableSheet(
+        wb, 'URL Breakdown',
+        [
+          { header: 'URL', key: 'url', width: 50 },
+          { header: 'Requests', key: 'requests', width: 12 },
+          { header: 'Avg Response Time (ms)', key: 'avg', width: 20 },
+          { header: 'Success Rate (%)', key: 'rate', width: 16 },
+          { header: 'Errors', key: 'errors', width: 10 },
+        ],
+        Object.entries(results.urlBreakdown ?? {}).map(([url, m]: [string, any]) => ({
+          url, requests: m.requests ?? 0, avg: m.avgResponseTime ?? 0,
+          rate: Number((m.successRate ?? 0).toFixed(1)),
+          errors: (m.errors ?? []).reduce((s: number, e: any) => s + e.count, 0),
+        })),
+      )
+    })
   }
 
   // ─── UI ─────────────────────────────────────────────────────────────────────
@@ -574,12 +614,12 @@ export const TestResults: React.FC<TestResultsProps> = ({ results, phases }) => 
           </div>
           <div className="flex items-center gap-3">
             <Button
-              onClick={exportToCSV}
+              onClick={() => { void exportToExcel() }}
               variant="outline"
               className="border-gray-200 text-gray-600 hover:bg-gray-50 hover:text-gray-700"
             >
               <Sheet className="mr-2 h-4 w-4" />
-              Export CSV
+              Export Excel
             </Button>
             <Button
               onClick={exportToPDF}
@@ -598,7 +638,8 @@ export const TestResults: React.FC<TestResultsProps> = ({ results, phases }) => 
         </div>
       </div>
 
-      <div className="mb-8">
+      <div className="mb-8 space-y-6">
+        <BrsContextCard context={results.brsContext} />
         <SignOffPanel testId={results.testId} signOffs={signOffs ?? []} />
       </div>
 

@@ -16,6 +16,7 @@ import { Label } from "~/components/ui/label";
 import { Upload, Play, Loader2 } from "lucide-react";
 import { api } from "~/trpc/react";
 import { formatTRPCError } from "~/lib/format-error";
+import { BrsUploadPanel, type BrsApplyPayload } from "~/components/brs-upload-panel";
 
 type Mode = "functional" | "load";
 
@@ -32,6 +33,12 @@ export function ScenarioConfiguration() {
   const [fileSize, setFileSize] = useState<number | null>(null);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [brsContext, setBrsContext] = useState<Record<string, string> | null>(null);
+
+  const handleBrsApply = ({ testName: name, brsContext: context }: BrsApplyPayload) => {
+    if (!testName.trim()) setTestName(name);
+    setBrsContext(context);
+  };
 
   const start = api.test.startScenario.useMutation({
     onSuccess() {
@@ -120,6 +127,7 @@ export function ScenarioConfiguration() {
         users: u,
         rampup: r,
         duration: d,
+        brs_context: brsContext && Object.keys(brsContext).length > 0 ? brsContext : undefined,
       });
       return;
     }
@@ -130,6 +138,7 @@ export function ScenarioConfiguration() {
       file_id: fileId,
       jmx_filename: filename ?? undefined,
       mode,
+      brs_context: brsContext && Object.keys(brsContext).length > 0 ? brsContext : undefined,
     });
   };
 
@@ -245,6 +254,10 @@ export function ScenarioConfiguration() {
           )}
         </CardContent>
       </Card>
+
+      <div className="mb-6">
+        <BrsUploadPanel onApply={handleBrsApply} disabled={start.isPending} supportsUrls={false} />
+      </div>
 
       {error && (
         <div className="mb-4 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
