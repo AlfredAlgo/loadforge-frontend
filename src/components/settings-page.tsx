@@ -26,7 +26,7 @@ export function SettingsPage() {
 
       <div className="space-y-6">
         <GeneralSettings />
-        <SingleSignOnSettings isAdmin={isAdmin} />
+        <SingleSignOnSettings />
         {isAdmin ? <TeamManagement /> : <MyTeam />}
         <SavedEnvironments />
       </div>
@@ -160,29 +160,8 @@ function GeneralSettings() {
 }
 
 // ── Single Sign-On (not wired to a provider yet) ────────────────────────────
-function SingleSignOnSettings({ isAdmin }: { isAdmin: boolean }) {
+function SingleSignOnSettings() {
   const { data, isLoading } = api.settings.getSso.useQuery()
-  const update = api.settings.updateSso.useMutation()
-  const [form, setForm] = useState({
-    provider: "azure_ad" as "azure_ad" | "okta" | "generic_oidc",
-    clientId: "",
-    clientSecret: "",
-    issuerUrl: "",
-  })
-  const [saved, setSaved] = useState(false)
-
-  useEffect(() => {
-    if (data) setForm(data)
-  }, [data])
-
-  const save = () => {
-    update.mutate(form, {
-      onSuccess: () => {
-        setSaved(true)
-        setTimeout(() => setSaved(false), 2000)
-      },
-    })
-  }
 
   return (
     <Card className="border-gray-200">
@@ -190,85 +169,33 @@ function SingleSignOnSettings({ isAdmin }: { isAdmin: boolean }) {
         <CardTitle className="flex items-center gap-2 text-gray-900">
           <Building2 className="h-5 w-5 text-gray-400" />
           Single Sign-On
-          <Badge variant="outline" className="border-amber-300 text-amber-700">Coming soon</Badge>
+          {data && (
+            <Badge
+              variant="outline"
+              className={data.microsoftConfigured ? "border-green-300 text-green-700" : "border-amber-300 text-amber-700"}
+            >
+              {data.microsoftConfigured ? "Connected" : "Not configured"}
+            </Badge>
+          )}
         </CardTitle>
         <CardDescription className="text-gray-600">
-          Configure the identity provider here now — logging in with it isn't wired up yet, but the config will be ready the moment it is.
+          Microsoft Entra ID (Azure AD) sign-in. The credentials live in the server environment, not here — this just shows whether they're set.
         </CardDescription>
       </CardHeader>
-      <CardContent className="space-y-4">
+      <CardContent>
         {isLoading ? (
           <p className="text-sm text-gray-500">Loading…</p>
+        ) : data?.microsoftConfigured ? (
+          <p className="text-sm text-gray-700">
+            "Continue with Microsoft" is live on the login page, scoped to tenant{" "}
+            <code className="rounded bg-gray-100 px-1.5 py-0.5 font-mono text-xs">{data.tenantId}</code>.
+          </p>
         ) : (
-          <>
-            <div>
-              <Label className="text-gray-700">Provider</Label>
-              <Select
-                disabled={!isAdmin}
-                value={form.provider}
-                onValueChange={(v) => setForm({ ...form, provider: v as typeof form.provider })}
-              >
-                <SelectTrigger className="border-gray-300">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="azure_ad">Azure AD / Entra ID</SelectItem>
-                  <SelectItem value="okta">Okta</SelectItem>
-                  <SelectItem value="generic_oidc">Generic OIDC</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div>
-                <Label htmlFor="sso-client-id" className="text-gray-700">Client ID</Label>
-                <Input
-                  id="sso-client-id"
-                  disabled={!isAdmin}
-                  value={form.clientId}
-                  onChange={(e) => setForm({ ...form, clientId: e.target.value })}
-                  className="border-gray-300"
-                />
-              </div>
-              <div>
-                <Label htmlFor="sso-client-secret" className="text-gray-700">Client Secret</Label>
-                <Input
-                  id="sso-client-secret"
-                  type="password"
-                  disabled={!isAdmin}
-                  value={form.clientSecret}
-                  onChange={(e) => setForm({ ...form, clientSecret: e.target.value })}
-                  className="border-gray-300"
-                />
-              </div>
-            </div>
-            <div>
-              <Label htmlFor="sso-issuer" className="text-gray-700">Issuer URL</Label>
-              <Input
-                id="sso-issuer"
-                disabled={!isAdmin}
-                placeholder="https://login.microsoftonline.com/<tenant>/v2.0"
-                value={form.issuerUrl}
-                onChange={(e) => setForm({ ...form, issuerUrl: e.target.value })}
-                className="border-gray-300"
-              />
-            </div>
-            <div className="flex items-center justify-between rounded-lg border border-gray-200 bg-gray-50 p-3">
-              <Label className="text-gray-500">Enable single sign-on for login</Label>
-              <Switch checked={false} disabled title="Coming soon" />
-            </div>
-
-            {isAdmin ? (
-              <div className="flex items-center justify-end gap-3">
-                {saved && <span className="text-sm text-green-600">Saved.</span>}
-                <Button onClick={save} disabled={update.isPending} variant="outline">
-                  <Save className="mr-2 h-4 w-4" />
-                  {update.isPending ? "Saving…" : "Save SSO Config"}
-                </Button>
-              </div>
-            ) : (
-              <p className="text-xs text-gray-500">Only an admin can change these settings.</p>
-            )}
-          </>
+          <p className="text-sm text-gray-500">
+            Not set up yet — an admin needs to set <code className="rounded bg-gray-100 px-1 py-0.5 font-mono text-xs">AZURE_CLIENT_ID</code>,{" "}
+            <code className="rounded bg-gray-100 px-1 py-0.5 font-mono text-xs">AZURE_CLIENT_SECRET</code>, and{" "}
+            <code className="rounded bg-gray-100 px-1 py-0.5 font-mono text-xs">AZURE_TENANT_ID</code> in the server environment (Azure App Service → Configuration), the same way the other server secrets are set.
+          </p>
         )}
       </CardContent>
     </Card>

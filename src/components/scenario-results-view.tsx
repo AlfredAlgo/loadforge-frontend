@@ -18,11 +18,12 @@ import { gautengLogoB64 } from "~/lib/gauteng-logo-b64";
 import { api } from "~/trpc/react";
 import { SignOffPanel } from "~/components/sign-off-panel";
 import { BrsContextCard } from "~/components/brs-context-card";
+import { TestClaimsPanel } from "~/components/test-claims-panel";
 import { BRS_FIELD_LABELS, BRS_REPORT_FIELD_ORDER } from "~/lib/brs-fields";
 import {
-  REPORT_COLORS, addChart, brsContextSection, captureChart, deploymentReadiness, drawFooter, narrativeBox,
-  pageBand, pickPercentile, readinessBanner, sectionHeading, signOffSection, suggestFix, textBlock, toPercent,
-  verdictCellStyler, verdictFor,
+  REPORT_COLORS, addChart, brsContextSection, captureChart, countNotMetClaims, deploymentReadiness, drawFooter,
+  narrativeBox, notMetClaimsFlag, pageBand, pickPercentile, readinessBanner, sectionHeading, signOffSection,
+  suggestFix, testClaimsSection, textBlock, toPercent, verdictCellStyler, verdictFor,
 } from "~/lib/pdf-report";
 import type {
   ScenarioFinalMetrics,
@@ -230,6 +231,11 @@ export function ScenarioResultsView({
     { testId: testId ?? "" },
     { enabled: !!testId },
   );
+  // Same pattern — shared with the on-screen Test Claims panel.
+  const { data: claims } = api.claims.list.useQuery(
+    { testId: testId ?? "" },
+    { enabled: !!testId },
+  );
 
   const p50 = summaryPercentile(summary, 50);
   const p95 = summaryPercentile(summary, 95);
@@ -307,6 +313,14 @@ export function ScenarioResultsView({
         brsContextSection(doc, brsContext, 19);
       }
 
+      // Test Claims — manual requirement attestations, also only when
+      // there's something recorded.
+      if (claims && claims.length > 0) {
+        doc.addPage();
+        pageBand(doc, "Test Claims");
+        testClaimsSection(doc, claims, 19);
+      }
+
       // ════════════════════════ PAGE 2 — TEST OVERVIEW + NARRATIVE ══════════
       doc.addPage();
       pageBand(doc, "Test Overview");
@@ -360,9 +374,10 @@ export function ScenarioResultsView({
       // Deployment readiness was already computed above (component scope) so
       // the on-screen badge and this PDF banner always agree.
       const afterReadiness = readinessBanner(doc, readiness.verdict, readiness.label, readiness.detail, 19);
+      const afterNotMetFlag = notMetClaimsFlag(doc, countNotMetClaims(claims ?? []), afterReadiness);
 
       const recommendations = buildRecommendations(readiness.verdict, (summary.error_count ?? 0) > 0);
-      const afterRecommendations = narrativeBox(doc, "Recommendations", recommendations, afterReadiness + 4, REPORT_COLORS.navy);
+      const afterRecommendations = narrativeBox(doc, "Recommendations", recommendations, afterNotMetFlag + 4, REPORT_COLORS.navy);
 
       addChart(doc, avgTimeImg, 14, afterRecommendations + 4, 182, 58, "Average Response Time per Step (ms)");
 
@@ -481,6 +496,10 @@ export function ScenarioResultsView({
           { heading: "What went right", lines: narrative.right },
           { heading: "What went wrong", lines: narrative.wrong },
           ...(brsNotes.length > 0 ? [{ heading: "Business Requirements Context", lines: brsNotes }] : []),
+          ...((claims ?? []).length > 0 ? [{
+            heading: "Test Claims",
+            lines: (claims ?? []).map(c => `[${c.verdict.replace("_", " ")}] ${c.requirement}: ${c.claim}`),
+          }] : []),
         ],
       });
 
@@ -538,11 +557,17 @@ export function ScenarioResultsView({
           </Button>
           {mode && <Badge variant="outline">{mode}</Badge>}
           <Badge className={readinessBadgeClass(readiness.verdict)}>{readiness.label}</Badge>
+          {countNotMetClaims(claims ?? []) > 0 && (
+            <Badge className="bg-red-100 text-red-700 hover:bg-red-100">
+              {countNotMetClaims(claims ?? [])} requirement{countNotMetClaims(claims ?? []) === 1 ? "" : "s"} not met
+            </Badge>
+          )}
         </div>
       </div>
 
       <div className="mb-6 space-y-6">
         <BrsContextCard context={brsContext} />
+        <TestClaimsPanel testId={testId} />
         <SignOffPanel testId={testId} signOffs={signOffs ?? []} />
       </div>
 

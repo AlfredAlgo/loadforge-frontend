@@ -13,9 +13,11 @@ import { gautengLogoB64 } from "~/lib/gauteng-logo-b64"
 import { api } from "~/trpc/react"
 import { SignOffPanel } from "~/components/sign-off-panel"
 import { BrsContextCard } from "~/components/brs-context-card"
+import { TestClaimsPanel } from "~/components/test-claims-panel"
 import {
-  REPORT_COLORS, addChart, brsContextSection, captureChart, deploymentReadiness, drawFooter, narrativeBox,
-  pageBand, readinessBanner, sectionHeading, signOffSection, suggestFix, textBlock, verdictCellStyler, verdictFor,
+  REPORT_COLORS, addChart, brsContextSection, captureChart, countNotMetClaims, deploymentReadiness, drawFooter,
+  narrativeBox, notMetClaimsFlag, pageBand, readinessBanner, sectionHeading, signOffSection, suggestFix, testClaimsSection,
+  textBlock, verdictCellStyler, verdictFor,
 } from "~/lib/pdf-report"
 import { BRS_FIELD_LABELS, BRS_REPORT_FIELD_ORDER } from "~/lib/brs-fields"
 
@@ -243,6 +245,11 @@ export const TestResults: React.FC<TestResultsProps> = ({ results, phases }) => 
     { testId: results.testId ?? '' },
     { enabled: !!results.testId },
   )
+  // Same pattern — shared with the on-screen Test Claims panel.
+  const { data: claims } = api.claims.list.useQuery(
+    { testId: results.testId ?? '' },
+    { enabled: !!results.testId },
+  )
 
   const toggleUrl = (url: string) => {
     setExpandedUrls(prev => {
@@ -336,6 +343,14 @@ export const TestResults: React.FC<TestResultsProps> = ({ results, phases }) => 
         brsContextSection(doc, results.brsContext, 19)
       }
 
+      // Test Claims — manual requirement attestations, also only when
+      // there's something recorded.
+      if (claims && claims.length > 0) {
+        doc.addPage()
+        pageBand(doc, 'Test Claims')
+        testClaimsSection(doc, claims, 19)
+      }
+
       // ══════════════════════════════════════════════════════════════════════
       // PAGE 2 — TEST OVERVIEW + NARRATIVE
       // ══════════════════════════════════════════════════════════════════════
@@ -393,9 +408,13 @@ export const TestResults: React.FC<TestResultsProps> = ({ results, phases }) => 
       // Deployment readiness was already computed above (component scope) so
       // the on-screen badge and this PDF banner always agree.
       const afterReadiness = readinessBanner(doc, readiness.verdict, readiness.label, readiness.detail, 19)
+      // Separate from the performance-based verdict above — a test can be
+      // "Ready" on success rate while a process owner has flagged a
+      // business requirement as unmet.
+      const afterNotMetFlag = notMetClaimsFlag(doc, countNotMetClaims(claims ?? []), afterReadiness)
 
       const recommendations = buildRecommendations(readiness.verdict, results.failedRequests > 0)
-      const afterRecommendations = narrativeBox(doc, 'Recommendations', recommendations, afterReadiness + 4, REPORT_COLORS.navy)
+      const afterRecommendations = narrativeBox(doc, 'Recommendations', recommendations, afterNotMetFlag + 4, REPORT_COLORS.navy)
 
       // Response time chart (full width)
       addChart(doc, responseTimeImg, 14, afterRecommendations + 4, 182, 55, 'Response Time by Phase — P50 / P95 / P99 (ms)')
@@ -552,6 +571,10 @@ export const TestResults: React.FC<TestResultsProps> = ({ results, phases }) => 
           { heading: 'What went right', lines: narrative.right },
           { heading: 'What went wrong', lines: narrative.wrong },
           ...(brsNotes.length > 0 ? [{ heading: 'Business Requirements Context', lines: brsNotes.map(n => `${n.heading}: ${n.lines[0]}`) }] : []),
+          ...((claims ?? []).length > 0 ? [{
+            heading: 'Test Claims',
+            lines: (claims ?? []).map(c => `[${c.verdict.replace('_', ' ')}] ${c.requirement}: ${c.claim}`),
+          }] : []),
         ],
       })
 
@@ -634,12 +657,19 @@ export const TestResults: React.FC<TestResultsProps> = ({ results, phases }) => 
               {isSuccess ? <CheckCircle2 className="mr-1 h-3 w-3" /> : <AlertCircle className="mr-1 h-3 w-3" />}
               {readiness.label}
             </Badge>
+            {countNotMetClaims(claims ?? []) > 0 && (
+              <Badge className="bg-red-100 text-red-700 hover:bg-red-100">
+                <AlertCircle className="mr-1 h-3 w-3" />
+                {countNotMetClaims(claims ?? [])} requirement{countNotMetClaims(claims ?? []) === 1 ? '' : 's'} not met
+              </Badge>
+            )}
           </div>
         </div>
       </div>
 
       <div className="mb-8 space-y-6">
         <BrsContextCard context={results.brsContext} />
+        <TestClaimsPanel testId={results.testId} />
         <SignOffPanel testId={results.testId} signOffs={signOffs ?? []} />
       </div>
 

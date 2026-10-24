@@ -43,6 +43,13 @@
       "when": 1791492804408,
       "tag": "0005_low_robin_chapel",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1792868160203,
+      "tag": "0006_high_spitfire",
+      "breakpoints": true
     }
   ]
 }

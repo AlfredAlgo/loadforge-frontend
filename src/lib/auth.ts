@@ -5,13 +5,42 @@ import * as schema from '../server/db/schema'
 import{nextCookies} from 'better-auth/next-js';
 import { env } from '~/env'
 
+// better-auth always computes the OAuth redirect URI itself as
+// `${baseURL}/api/auth/callback/microsoft` — there's no option to override
+// it per-provider. AZURE_REDIRECT_URI can't change that, so this only
+// checks the two agree and logs a loud warning if they don't — catching a
+// misconfigured Azure App Registration (or a BETTER_AUTH_URL that's drifted
+// from what's actually registered there) at startup instead of a confusing
+// "redirect_uri_mismatch" the next time someone tries to log in.
+if (env.AZURE_REDIRECT_URI) {
+  const computed = `${env.BETTER_AUTH_URL}/api/auth/callback/microsoft`;
+  if (env.AZURE_REDIRECT_URI !== computed) {
+    console.warn(
+      `[auth] AZURE_REDIRECT_URI ("${env.AZURE_REDIRECT_URI}") does not match the redirect URI this app will actually use ("${computed}"). ` +
+      `Update the Redirect URI registered on the Azure AD App Registration to exactly "${computed}", or Microsoft sign-in will fail.`,
+    );
+  }
+}
+
 export const auth = betterAuth({
-//   socialProviders: {
-//     google: {
-//       clientId: process.env.GOOGLE_CLIENT_ID as string,
-//       clientSecret: process.env.GOOGLE_CLIENT_SECRET as string
-//     }
-//   },
+  // Microsoft Entra ID (Azure AD) SSO — only registered when both the
+  // client ID and secret are actually set, so an environment without them
+  // configured just doesn't offer the Microsoft button rather than
+  // crashing on startup or registering a half-configured provider.
+  // Scoping to a specific tenantId (rather than the "common" default)
+  // means only accounts in this Azure directory can sign in via SSO —
+  // what you want for a government tenant, not an open "any Microsoft
+  // account" login.
+  socialProviders:
+    env.AZURE_CLIENT_ID && env.AZURE_CLIENT_SECRET
+      ? {
+          microsoft: {
+            clientId: env.AZURE_CLIENT_ID,
+            clientSecret: env.AZURE_CLIENT_SECRET,
+            tenantId: env.AZURE_TENANT_ID,
+          },
+        }
+      : undefined,
   database: drizzleAdapter(db, {
     provider: "pg",
     schema : {

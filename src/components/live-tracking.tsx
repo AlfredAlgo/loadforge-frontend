@@ -1,13 +1,27 @@
 "use client"
 
+import { useState } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "~/components/ui/card"
 import { Badge } from "~/components/ui/badge"
+import { Button } from "~/components/ui/button"
 import { Progress } from "~/components/ui/progress"
-import { Activity, Clock, TrendingUp, AlertCircle, CheckCircle2, Loader2 } from "lucide-react"
+import { Activity, Clock, TrendingUp, AlertCircle, CheckCircle2, Loader2, X } from "lucide-react"
 import { useLiveTestTracking, type LiveTestData } from "~/hooks/useLiveTestTracking"
+import { api } from "~/trpc/react"
 
 export function LiveTracking() {
-  const { isConnected, isTestRunning, tests, runningTests, error } = useLiveTestTracking()
+  const { isConnected, isTestRunning, tests: allTests, runningTests: allRunningTests, error } = useLiveTestTracking()
+  // Cards the user has cancelled this session — dropped immediately rather
+  // than waiting on a refetch, since the DB update already made the drop
+  // permanent (a cancelled test won't come back as "running" on reload).
+  const [cancelledIds, setCancelledIds] = useState<Set<string>>(new Set())
+  const cancelTest = api.test.cancelTest.useMutation({
+    onSuccess: (_data, variables) => {
+      setCancelledIds((prev) => new Set(prev).add(variables.testId))
+    },
+  })
+  const tests = allTests.filter((t) => !cancelledIds.has(t.test_id))
+  const runningTests = allRunningTests.filter((t) => !cancelledIds.has(t.test_id))
 
   const getStatusBadge = (status: LiveTestData["status"]) => {
     switch (status) {
@@ -90,7 +104,21 @@ export function LiveTracking() {
                 <span>Elapsed: {getElapsedTime(test.startTime.toISOString())}</span>
               </CardDescription>
             </div>
-            {getStatusBadge(test.status)}
+            <div className="flex items-center gap-2">
+              {getStatusBadge(test.status)}
+              {test.status === "running" && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 px-2 text-gray-400 hover:bg-red-50 hover:text-red-600"
+                  disabled={cancelTest.isPending}
+                  onClick={() => cancelTest.mutate({ testId: test.test_id })}
+                  title="Cancel — use this if a run is stuck with no data"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </Button>
+              )}
+            </div>
           </div>
         </CardHeader>
         <CardContent className="space-y-6">

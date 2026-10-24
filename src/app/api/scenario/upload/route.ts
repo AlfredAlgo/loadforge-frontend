@@ -7,6 +7,47 @@ export const dynamic = "force-dynamic";
 
 const MAX_BYTES = 5 * 1024 * 1024;
 
+/**
+ * A file with the right extension can still be useless to run — an empty
+ * or gutted .jmx with no HTTP samplers, or a Taurus .yaml with no request
+ * steps under any scenario. The backend accepts those (they're structurally
+ * valid, just empty) and then never reports progress or completion for
+ * them, leaving the run stuck at "running" forever. Catching that here,
+ * before the file ever reaches the backend, is cheap and gives an
+ * actionable message instead of a run nobody can diagnose.
+ */
+function findUploadIssue(filename: string, text: string): string | null {
+  const lower = filename.toLowerCase();
+
+  if (lower.endsWith(".jmx")) {
+    if (!/<jmeterTestPlan[\s>]/.test(text)) {
+      return "This doesn't look like a JMeter test plan — no <jmeterTestPlan> root element was found. Export it again from JMeter (File → Save Test Plan As).";
+    }
+    // Enabled defaults to true when the attribute is omitted, so only an
+    // explicit enabled="false" on the opening tag counts as disabled.
+    const samplerTags = text.match(/<HTTPSamplerProxy\b[^>]*>/g) ?? [];
+    const hasEnabledSampler = samplerTags.some((tag) => !/enabled\s*=\s*"false"/.test(tag));
+    if (!hasEnabledSampler) {
+      return samplerTags.length > 0
+        ? "Every HTTP Request sampler in this test plan is disabled, so the run would never send a single request. Enable at least one sampler and re-export."
+        : "This test plan has no HTTP Request samplers in it, so there's nothing for LoadForge to run. Record or add at least one HTTP request and re-export.";
+    }
+  } else if (lower.endsWith(".yaml") || lower.endsWith(".yml")) {
+    if (!/^\s*scenarios\s*:/m.test(text)) {
+      return "This doesn't look like a Taurus/BlazeMeter scenario file — no top-level \"scenarios:\" key was found.";
+    }
+    // Heuristic, not a full YAML parse: a "requests:" key is only useful if
+    // followed by at least one list item (either a "- " block entry, or a
+    // non-empty inline [...] array) somewhere after it.
+    const hasRequests = /requests\s*:\s*(\n\s*-\s+\S|\[[^\]\s][^\]]*\])/.test(text);
+    if (!hasRequests) {
+      return "No request steps were found under any scenario in this file, so the run would have nothing to send. Add at least one request to a scenario's \"requests:\" list and re-upload.";
+    }
+  }
+
+  return null;
+}
+
 export async function POST(request: Request) {
   const session = await auth.api.getSession({ headers: request.headers });
   if (!session?.user) {
@@ -28,6 +69,12 @@ export async function POST(request: Request) {
   }
   if (file.size > MAX_BYTES) {
     return NextResponse.json({ error: "file too large (5MB cap)" }, { status: 413 });
+  }
+
+  const text = await file.text();
+  const issue = findUploadIssue(file.name, text);
+  if (issue) {
+    return NextResponse.json({ error: issue }, { status: 422 });
   }
 
   const forwarded = new FormData();

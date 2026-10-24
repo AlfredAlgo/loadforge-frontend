@@ -216,6 +216,30 @@ export const signOffs = createTable("sign_off", {
     .notNull(),
 });
 
+// A manual claim that a specific BRS requirement was (or wasn't) met by
+// this test run, written by a tester/process owner after the test
+// completes and before the report is generated. Unlike signOffs, these are
+// editable/deletable — they're drafted report content, not a decision of
+// record, so a typo or a wrong number doesn't need a whole new row to fix.
+export const testClaims = createTable("test_claim", {
+  id: varchar("id").primaryKey(),
+  test_id: varchar("test_id")
+    .references(() => completeTests.id)
+    .notNull(),
+  user_id: varchar("user_id")
+    .references(() => users.id)
+    .notNull(),
+  requirement: varchar("requirement", { length: 512 }).notNull(),
+  claim: text("claim").notNull(),
+  verdict: varchar("verdict", { length: 32 }).default("met").notNull(), // 'met' | 'partially_met' | 'not_met' | 'n_a'
+  created_at: timestamp("created_at")
+    .default(sql`CURRENT_TIMESTAMP`)
+    .notNull(),
+  updated_at: timestamp("updated_at")
+    .default(sql`CURRENT_TIMESTAMP`)
+    .notNull(),
+});
+
 // A reusable target (base URL + optional auth headers) so a tester doesn't
 // have to retype the same URL/headers for every new test against the same
 // system. Scoped to a team when the creator has one, otherwise personal.

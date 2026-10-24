@@ -11,6 +11,7 @@ import { Input } from "~/components/ui/input"
 import { Label } from "~/components/ui/label"
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "~/components/ui/card"
 import { authClient } from "~/lib/auth.client"
+import { api } from "~/trpc/react"
 
 interface AuthFormProps {
   mode: "login" | "signup"
@@ -29,6 +30,7 @@ export function AuthForm({ mode }: AuthFormProps) {
   const [error, setError] = useState("")
 
   const isLogin = mode === "login"
+  const { data: sso } = api.settings.getSso.useQuery()
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -114,7 +116,7 @@ export function AuthForm({ mode }: AuthFormProps) {
     }
   }
 
-  const handleOAuthLogin = async (provider: "google") => {
+  const handleOAuthLogin = async (provider: "google" | "microsoft") => {
     setIsLoading(true)
     try {
       await authClient.signIn.social({
@@ -145,33 +147,33 @@ export function AuthForm({ mode }: AuthFormProps) {
         </CardHeader>
 
         <CardContent className="space-y-4">
-          {/* Single sign-on — not wired to an identity provider yet. An
-              admin can pre-configure the provider in Settings → Single
-              Sign-On ahead of time; this button starts disabled until
-              that integration ships. */}
-          <div className="grid grid-cols-1 gap-3">
-            <Button
-              variant="outline"
-              type="button"
-              disabled
-              title="Single sign-on is coming soon"
-              className="h-11 cursor-not-allowed border-slate-200 text-slate-400"
-            >
-              <Building2 className="mr-2 h-5 w-5" />
-              Single Sign-On — Coming soon
-            </Button>
-          </div>
+          {sso?.microsoftConfigured && (
+            <>
+              <div className="grid grid-cols-1 gap-3">
+                <Button
+                  variant="outline"
+                  type="button"
+                  disabled={isLoading}
+                  onClick={() => handleOAuthLogin("microsoft")}
+                  className="h-11 border-slate-200 hover:bg-slate-50"
+                >
+                  <Building2 className="mr-2 h-5 w-5 text-[#5E5E5E]" />
+                  Continue with Microsoft
+                </Button>
+              </div>
 
-          <div className="relative">
-            <div className="absolute inset-0 flex items-center">
-              <span className="w-full border-t border-slate-200" />
-            </div>
-            <div className="relative flex justify-center text-xs uppercase">
-              <span className="bg-card px-2 text-muted-foreground">
-                Or continue with email
-              </span>
-            </div>
-          </div>
+              <div className="relative">
+                <div className="absolute inset-0 flex items-center">
+                  <span className="w-full border-t border-slate-200" />
+                </div>
+                <div className="relative flex justify-center text-xs uppercase">
+                  <span className="bg-card px-2 text-muted-foreground">
+                    Or continue with email
+                  </span>
+                </div>
+              </div>
+            </>
+          )}
 
           {/* Email Form */}
           <form onSubmit={handleSubmit} className="space-y-4">

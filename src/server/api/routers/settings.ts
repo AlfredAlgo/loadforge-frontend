@@ -1,13 +1,13 @@
 import { z } from "zod"
 import { eq } from "drizzle-orm"
-import { createTRPCRouter, protectedProcedure, adminProcedure } from "~/server/api/trpc"
+import { createTRPCRouter, publicProcedure, protectedProcedure } from "~/server/api/trpc"
 import { settings } from "~/server/db/schema"
+import { env } from "~/env"
 
 // `settings` is a plain key/value table — each "section" below is a JSON
 // blob under its own key, read/written as a whole rather than modeled as
 // its own table, since there's only ever one row per key.
 const GENERAL_KEY = "general"
-const SSO_KEY = "sso"
 
 const generalSchema = z.object({
   emailEnabled: z.boolean(),
@@ -24,22 +24,6 @@ const defaultGeneral = {
   defaultDuration: 300,
   defaultRampUp: 60,
   defaultRampDown: 60,
-}
-
-// SSO isn't wired up to an identity provider yet — this just persists the
-// config a future integration will read, and the UI shows it as
-// "Coming soon" with the actual enable switch disabled until then.
-const ssoSchema = z.object({
-  provider: z.enum(["azure_ad", "okta", "generic_oidc"]),
-  clientId: z.string(),
-  clientSecret: z.string(),
-  issuerUrl: z.string(),
-})
-const defaultSso = {
-  provider: "azure_ad" as const,
-  clientId: "",
-  clientSecret: "",
-  issuerUrl: "",
 }
 
 async function getJson<T>(db: typeof import("~/server/db").db, key: string, fallback: T): Promise<T> {
@@ -74,23 +58,17 @@ export const settingsRouter = createTRPCRouter({
       return next
     }),
 
-  // Readable by anyone signed in (so non-admins see the "coming soon"
-  // state too), but only an admin can change it.
-  getSso: protectedProcedure.query(async ({ ctx }) => {
-    const config = await getJson(ctx.db, SSO_KEY, defaultSso)
-    // Never send the client secret back down to the browser.
-    return { ...config, clientSecret: config.clientSecret ? "••••••••" : "" }
+  // Live status, not a stored config — the real Microsoft Entra ID
+  // credentials live in server environment variables (same as every other
+  // secret in this app), not in this settings table, since better-auth
+  // reads them once at startup. publicProcedure because the login page
+  // needs this before any session exists, to decide whether to show the
+  // "Continue with Microsoft" button. Never exposes the client secret
+  // itself — just whether one is set, and which tenant.
+  getSso: publicProcedure.query(() => {
+    return {
+      microsoftConfigured: !!(env.AZURE_CLIENT_ID && env.AZURE_CLIENT_SECRET),
+      tenantId: env.AZURE_TENANT_ID ?? null,
+    }
   }),
-
-  updateSso: adminProcedure
-    .input(ssoSchema.partial())
-    .mutation(async ({ ctx, input }) => {
-      const current = await getJson(ctx.db, SSO_KEY, defaultSso)
-      // Keep the existing secret if the admin left the masked value alone.
-      const nextSecret =
-        input.clientSecret && input.clientSecret !== "••••••••" ? input.clientSecret : current.clientSecret
-      const next = { ...current, ...input, clientSecret: nextSecret }
-      await setJson(ctx.db, SSO_KEY, next)
-      return { success: true }
-    }),
 })

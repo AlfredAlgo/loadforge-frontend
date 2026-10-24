@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import {
   Card,
   CardContent,
@@ -7,10 +8,12 @@ import {
   CardTitle,
 } from "~/components/ui/card";
 import { Badge } from "~/components/ui/badge";
+import { Button } from "~/components/ui/button";
 import { useLiveScenarioTracking } from "~/hooks/useLiveScenarioTracking";
-import { Activity, CheckCircle2, XCircle, Loader2 } from "lucide-react";
+import { Activity, CheckCircle2, XCircle, Loader2, X } from "lucide-react";
 import Link from "next/link";
 import { pickPercentile, toPercent } from "~/lib/pdf-report";
+import { api } from "~/trpc/react";
 
 function formatMs(value: number | null): string {
   if (value === null || value === undefined) return "—";
@@ -23,9 +26,18 @@ function formatPct(value: number): string {
 
 export function ScenarioLiveTracking() {
   const { isConnected, scenarios, error } = useLiveScenarioTracking();
-  const items = Array.from(scenarios.values()).sort(
-    (a, b) => b.startTime.getTime() - a.startTime.getTime(),
-  );
+  // Cards the user has cancelled this session — dropped immediately rather
+  // than waiting on a refetch, since the DB update already made the drop
+  // permanent (it won't come back as "running" on the next page load).
+  const [cancelledIds, setCancelledIds] = useState<Set<string>>(new Set());
+  const cancelTest = api.test.cancelTest.useMutation({
+    onSuccess: (_data, variables) => {
+      setCancelledIds((prev) => new Set(prev).add(variables.testId));
+    },
+  });
+  const items = Array.from(scenarios.values())
+    .filter((s) => !cancelledIds.has(s.test_id))
+    .sort((a, b) => b.startTime.getTime() - a.startTime.getTime());
 
   return (
     <main className="mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
@@ -71,6 +83,18 @@ export function ScenarioLiveTracking() {
                 <div className="flex items-center gap-2">
                   {s.mode && <Badge variant="outline">{s.mode}</Badge>}
                   <Badge>{s.status}</Badge>
+                  {s.status === "running" && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 px-2 text-gray-400 hover:bg-red-50 hover:text-red-600"
+                      disabled={cancelTest.isPending}
+                      onClick={() => cancelTest.mutate({ testId: s.test_id })}
+                      title="Cancel — use this if a run is stuck with no samples"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </Button>
+                  )}
                 </div>
               </div>
             </CardHeader>

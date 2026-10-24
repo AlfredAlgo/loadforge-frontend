@@ -6,6 +6,7 @@ import { dashboardRouter } from "./routers/dashboard"
 import { teamRouter } from "~/server/api/routers/team"
 import { environmentsRouter } from "~/server/api/routers/environments"
 import { signoffRouter } from "~/server/api/routers/signoff"
+import { claimsRouter } from "~/server/api/routers/claims"
 
 export const appRouter = createTRPCRouter({
   loadTest: loadTestRouter,
@@ -15,6 +16,7 @@ export const appRouter = createTRPCRouter({
   team: teamRouter,
   environments: environmentsRouter,
   signoff: signoffRouter,
+  claims: claimsRouter,
 })
 
 export type AppRouter = typeof appRouter

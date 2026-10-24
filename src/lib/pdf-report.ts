@@ -173,6 +173,33 @@ export function readinessBanner(
   return y + boxH + 8;
 }
 
+/**
+ * The readiness banner above is purely performance-based (success rate,
+ * response time) and a system can clear that bar while still failing a
+ * business requirement a human has flagged as unmet (fast enough, but
+ * missing a required capability). This doesn't change the readiness
+ * verdict — the two are kept deliberately separate — it just makes sure a
+ * reviewer skimming this page doesn't miss the other one.
+ */
+export function notMetClaimsFlag(doc: jsPDF, notMetCount: number, y: number): number {
+  if (notMetCount <= 0) return y;
+  const { red, redBg } = REPORT_COLORS;
+  const x = 14;
+  const w = PAGE_W - 28;
+  const label = `⚠ ${notMetCount} requirement claim${notMetCount === 1 ? "" : "s"} marked Not Met — see Test Claims.`;
+
+  doc.setFillColor(...redBg);
+  doc.setDrawColor(...red);
+  doc.setLineWidth(0.5);
+  doc.roundedRect(x, y, w, 9, 1.5, 1.5, "FD");
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8.3);
+  doc.setTextColor(...red);
+  doc.text(label, x + 4, y + 6);
+  doc.setTextColor(...REPORT_COLORS.charcoal);
+  return y + 9 + 6;
+}
+
 export interface SignOffEntry {
   decision: "approved" | "approved_with_reservations" | "rejected";
   comment: string | null;
@@ -245,6 +272,96 @@ export function signOffSection(doc: jsPDF, entries: SignOffEntry[], y: number): 
       doc.setTextColor(...charcoal);
       doc.text(wrapped, x + 4, cursor + 11);
     }
+
+    cursor += boxH + 3;
+  }
+  doc.setTextColor(...charcoal);
+  return cursor + 4;
+}
+
+export interface TestClaimEntry {
+  requirement: string;
+  claim: string;
+  verdict: "met" | "partially_met" | "not_met" | "n_a";
+  userName: string;
+  userEmail: string;
+  updatedAt: string;
+}
+
+function claimVerdictLabel(verdict: TestClaimEntry["verdict"]): string {
+  if (verdict === "met") return "Met";
+  if (verdict === "partially_met") return "Partially met";
+  if (verdict === "not_met") return "Not met";
+  return "N/A";
+}
+
+function claimVerdictColor(verdict: TestClaimEntry["verdict"]): RGB {
+  if (verdict === "met") return REPORT_COLORS.green;
+  if (verdict === "partially_met") return REPORT_COLORS.amber;
+  if (verdict === "not_met") return REPORT_COLORS.red;
+  return REPORT_COLORS.grey;
+}
+
+export function countNotMetClaims(claims: TestClaimEntry[]): number {
+  return claims.filter((c) => c.verdict === "not_met").length;
+}
+
+/**
+ * Manual requirement claims — a process owner's attestation that a
+ * specific BRS requirement was (or wasn't) demonstrated by this run,
+ * written after the test completes. This is a judgment call a human
+ * makes, separate from (and shown alongside, not merged into) the
+ * system's own performance-based readiness verdict.
+ */
+export function testClaimsSection(doc: jsPDF, entries: TestClaimEntry[], y: number): number {
+  const { charcoal, grey, rowAlt } = REPORT_COLORS;
+  sectionHeading(doc, "Test Claims", y);
+  let cursor = y + 9;
+
+  if (entries.length === 0) {
+    doc.setFont("helvetica", "italic");
+    doc.setFontSize(8.3);
+    doc.setTextColor(...grey);
+    doc.text("No requirement claims have been recorded for this test yet.", 14, cursor);
+    doc.setTextColor(...charcoal);
+    return cursor + 6;
+  }
+
+  const x = 14;
+  const w = PAGE_W - 28;
+  for (const entry of entries) {
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(8);
+    const wrapped = doc.splitTextToSize(entry.claim, w - 10) as string[];
+    const boxH = 16 + wrapped.length * 4;
+
+    doc.setFillColor(...rowAlt);
+    doc.setDrawColor(...claimVerdictColor(entry.verdict));
+    doc.setLineWidth(0.5);
+    doc.roundedRect(x, cursor, w, boxH, 1.5, 1.5, "FD");
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(8.3);
+    doc.setTextColor(...charcoal);
+    doc.text(entry.requirement, x + 4, cursor + 6);
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(7.5);
+    doc.setTextColor(...claimVerdictColor(entry.verdict));
+    doc.text(claimVerdictLabel(entry.verdict).toUpperCase(), x + w - 4, cursor + 6, { align: "right" });
+
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(7.5);
+    doc.setTextColor(...charcoal);
+    doc.text(wrapped, x + 4, cursor + 11);
+
+    doc.setFontSize(7);
+    doc.setTextColor(...grey);
+    doc.text(
+      `${entry.userName} (${entry.userEmail}) — ${new Date(entry.updatedAt).toLocaleString()}`,
+      x + 4,
+      cursor + boxH - 3,
+    );
 
     cursor += boxH + 3;
   }

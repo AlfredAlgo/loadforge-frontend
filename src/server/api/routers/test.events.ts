@@ -217,6 +217,26 @@ export const testsRouter = createTRPCRouter({
       createdAt: r.created_at?.toISOString?.() ?? null,
     }));
   }),
+  // Marks a stuck/unwanted "running" test as failed so it drops off the
+  // Live Tests / Live Scenarios list — e.g. a scenario uploaded from a file
+  // with no valid samplers, which the backend never reports progress or
+  // completion for, so it would otherwise sit at "running" forever.
+  cancelTest: protectedProcedure
+    .input(z.object({ testId: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const test = await ctx.db.query.completeTests.findFirst({ where: eq(completeTests.id, input.testId) });
+      if (!canViewTest(ctx.user, test)) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "You don't have access to this test." });
+      }
+      if (test!.status !== "running" && test!.status !== "pending") {
+        return { success: true }; // already finished one way or another — nothing to do
+      }
+      await ctx.db
+        .update(completeTests)
+        .set({ status: "failed", completed_at: new Date() })
+        .where(eq(completeTests.id, input.testId));
+      return { success: true };
+    }),
   getScenarioMetrics: protectedProcedure
     .input(z.object({ testId: z.string() }))
     .query(async ({ ctx, input }) => {
