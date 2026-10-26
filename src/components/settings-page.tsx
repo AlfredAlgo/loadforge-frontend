@@ -10,7 +10,7 @@ import { Badge } from "~/components/ui/badge"
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "~/components/ui/select"
-import { Save, Building2, Users, Globe, Plus, Trash2, ShieldCheck } from "lucide-react"
+import { Save, Building2, Users, Globe, Plus, Trash2, ShieldCheck, Pencil } from "lucide-react"
 import { api } from "~/trpc/react"
 
 export function SettingsPage() {
@@ -269,7 +269,25 @@ function TeamManagement() {
     },
   })
   const setUserRole = api.team.setUserRole.useMutation({ onSuccess: () => void utils.team.listAllUsers.invalidate() })
+  const createUser = api.team.createUser.useMutation({
+    onSuccess: () => {
+      void utils.team.listAllUsers.invalidate()
+      setShowAddUser(false)
+      setNewUser({ name: "", email: "", password: "", role: "tester" })
+    },
+  })
+  const updateUser = api.team.updateUser.useMutation({
+    onSuccess: () => { void utils.team.listAllUsers.invalidate(); setEditingUserId(null) },
+  })
+  const deleteUser = api.team.deleteUser.useMutation({
+    onSuccess: () => void utils.team.listAllUsers.invalidate(),
+  })
+  const [deleteError, setDeleteError] = useState<{ userId: string; message: string } | null>(null)
   const [newTeamName, setNewTeamName] = useState("")
+  const [showAddUser, setShowAddUser] = useState(false)
+  const [newUser, setNewUser] = useState({ name: "", email: "", password: "", role: "tester" as "admin" | "tester" })
+  const [editingUserId, setEditingUserId] = useState<string | null>(null)
+  const [editUser, setEditUser] = useState({ name: "", email: "" })
 
   return (
     <Card className="border-gray-200">
@@ -335,15 +353,88 @@ function TeamManagement() {
         </div>
 
         <div className="border-t border-gray-100 pt-4">
-          <p className="mb-3 text-sm font-medium text-gray-700">All Users — role & team</p>
+          <div className="mb-3 flex items-center justify-between">
+            <p className="text-sm font-medium text-gray-700">All Users — view, add, edit</p>
+            {!showAddUser && (
+              <Button size="sm" variant="outline" className="border-gray-300 text-gray-600" onClick={() => setShowAddUser(true)}>
+                <Plus className="mr-1 h-3.5 w-3.5" /> Add User
+              </Button>
+            )}
+          </div>
+
+          {showAddUser && (
+            <div className="mb-3 space-y-2 rounded-lg border border-purple-200 bg-purple-50/30 p-3">
+              <div className="grid gap-2 sm:grid-cols-2">
+                <Input placeholder="Full name" value={newUser.name} onChange={(e) => setNewUser({ ...newUser, name: e.target.value })} className="border-gray-300 bg-white" />
+                <Input placeholder="Email" type="email" value={newUser.email} onChange={(e) => setNewUser({ ...newUser, email: e.target.value })} className="border-gray-300 bg-white" />
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <Input placeholder="Temporary password (8+ chars)" type="password" value={newUser.password} onChange={(e) => setNewUser({ ...newUser, password: e.target.value })} className="border-gray-300 bg-white" />
+                <Select value={newUser.role} onValueChange={(v) => setNewUser({ ...newUser, role: v as "admin" | "tester" })}>
+                  <SelectTrigger className="border-gray-300 bg-white"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="tester">Tester</SelectItem>
+                    <SelectItem value="admin">Admin</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <p className="text-xs text-gray-500">
+                Only needed for someone who won't use "Continue with Microsoft" — SSO users get an account automatically on first sign-in.
+              </p>
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  disabled={createUser.isPending || !newUser.name.trim() || !newUser.email.trim() || newUser.password.length < 8}
+                  onClick={() => createUser.mutate(newUser)}
+                >
+                  {createUser.isPending ? "Creating…" : "Create account"}
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setShowAddUser(false)}>Cancel</Button>
+              </div>
+              {createUser.error && <p className="text-sm text-red-500">{createUser.error.message}</p>}
+            </div>
+          )}
+
           <div className="space-y-2">
             {(allUsers ?? []).map((u) => (
               <div key={u.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-gray-200 p-2.5">
-                <div>
-                  <p className="text-sm font-medium text-gray-900">{u.name}</p>
-                  <p className="text-xs text-gray-500">{u.email}</p>
-                </div>
+                {editingUserId === u.id ? (
+                  <div className="flex flex-1 flex-wrap items-center gap-2">
+                    <Input value={editUser.name} onChange={(e) => setEditUser({ ...editUser, name: e.target.value })} className="h-8 w-40 border-gray-300 text-sm" />
+                    <Input value={editUser.email} onChange={(e) => setEditUser({ ...editUser, email: e.target.value })} className="h-8 w-52 border-gray-300 text-sm" />
+                    <Button size="sm" disabled={updateUser.isPending} onClick={() => updateUser.mutate({ userId: u.id, ...editUser })}>Save</Button>
+                    <Button size="sm" variant="ghost" onClick={() => setEditingUserId(null)}>Cancel</Button>
+                  </div>
+                ) : (
+                  <div>
+                    <p className="text-sm font-medium text-gray-900">{u.name}</p>
+                    <p className="text-xs text-gray-500">{u.email}</p>
+                  </div>
+                )}
                 <div className="flex items-center gap-2">
+                  {editingUserId !== u.id && (
+                    <>
+                      <Button
+                        size="sm" variant="ghost" className="h-8 px-2 text-gray-400 hover:text-gray-700"
+                        onClick={() => { setEditingUserId(u.id); setEditUser({ name: u.name, email: u.email }) }}
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        size="sm" variant="ghost" className="h-8 px-2 text-gray-400 hover:bg-red-50 hover:text-red-600"
+                        disabled={deleteUser.isPending}
+                        onClick={() => {
+                          setDeleteError(null)
+                          if (!window.confirm(`Delete ${u.name} (${u.email})? This can't be undone.`)) return
+                          deleteUser.mutate({ userId: u.id }, {
+                            onError: (err) => setDeleteError({ userId: u.id, message: err.message }),
+                          })
+                        }}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </>
+                  )}
                   <Select
                     value={u.teamId ?? "none"}
                     onValueChange={(v) => setUserTeam.mutate({ userId: u.id, teamId: v === "none" ? null : v })}
@@ -371,6 +462,8 @@ function TeamManagement() {
                     </SelectContent>
                   </Select>
                 </div>
+                {updateUser.error && editingUserId === u.id && <p className="w-full text-sm text-red-500">{updateUser.error.message}</p>}
+                {deleteError?.userId === u.id && <p className="w-full text-sm text-red-500">{deleteError.message}</p>}
               </div>
             ))}
           </div>
