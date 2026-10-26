@@ -2,7 +2,15 @@ import { NextResponse } from "next/server"
 import type { NextRequest } from "next/server"
 
 const PUBLIC_PATHS = ["/login", "/signup", "/forgot.password", "/reset.password"]
-const PUBLIC_API_PREFIXES = ["/api/auth"]
+// tRPC enforces its own per-procedure auth (protectedProcedure/adminProcedure
+// correctly reject unauthorized access on their own) — letting it through
+// here isn't a security gap, it's removing a redundant, blunter check that
+// was breaking genuinely public procedures (like the login page's own
+// "is SSO configured?" query) for the exact visitors who are supposed to
+// be unauthenticated: it saw no session cookie, redirected the request to
+// /login, and the resulting HTML broke the query's JSON parsing instead of
+// returning a real response.
+const PUBLIC_API_PREFIXES = ["/api/auth", "/api/trpc"]
 
 const SESSION_COOKIES = [
   "__Secure-better-auth.session_token",

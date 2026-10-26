@@ -38,6 +38,19 @@ export const auth = betterAuth({
             clientId: env.AZURE_CLIENT_ID,
             clientSecret: env.AZURE_CLIENT_SECRET,
             tenantId: env.AZURE_TENANT_ID,
+            // better-auth's default scope list adds "User.Read" (a
+            // Microsoft Graph permission, used only to fetch a profile
+            // photo we don't display) and "offline_access" (long-lived
+            // refresh tokens we don't need for plain sign-in). Governed
+            // tenants commonly auto-allow bare sign-in scopes for any
+            // user but require admin consent the moment an app asks for
+            // real Graph access — which is exactly what those two add.
+            // Requesting only what login actually needs avoids asking for
+            // more than this app uses, and may avoid the admin-consent
+            // prompt entirely.
+            disableDefaultScope: true,
+            scope: ["openid", "profile", "email"],
+            disableProfilePhoto: true,
           },
         }
       : undefined,
